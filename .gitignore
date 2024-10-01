@@ -1,0 +1,4 @@
+contracts/artifacts/
+nash/__pycache__/
+correlated/__pycache__/
+.DS_Store

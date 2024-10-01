@@ -5,6 +5,9 @@ EPS = 1e-5
 # Reference notes for this code can be found at https://www.notion.so/Summer-2024-Notes-b6100cca39664b20b6f53d51b847e80c?pvs=4
 ###
 
+def format_boundary_conditions(boundary_conditions):
+    return "\n".join(map(lambda y: str([[f"{z['x']:.3f}", f"{z['y']:.3f}"] for z in y]), boundary_conditions))
+
 ###
 # INPUTS
 # S: the matrix of strategies for each player n, where S[n] is the list of strategies for player n
@@ -139,6 +142,58 @@ def best_mixed_response(S, u_n, x, n):
         return result.x  # Optimal mixed strategy profile for player n
     else:
         raise ValueError("Linear programming failed to find a solution", str(result.status))
+
+###
+# INPUTS
+# U: array of payoff functions for each player, array where u[n] is the payoff function for player n
+# xi: the mixed strategy profile, array dimension N, each element i an array of length S[i], with the sum of each row equal to 1
+# K: the number of players to calculate alpha for, 0 if all players
+#
+# RETURNS
+# alpha: the alpha values for each player in the game to calculate x
+###
+def calculate_alpha(U, xi, K = 0):
+    N = len(U)
+    if K == 0:
+        K = N
+    alpha = [0] * N
+    for i in range(K):
+        product = 1
+        for j in range(N):
+            if j != i:
+                product *= neg_expected_utility(xi, U[j], j)
+        denom = neg_expected_utility(xi, U[i], i) ** (N - 2)
+        alpha[i] = (product / denom) ** (1 / (N - 1))
+    return alpha
+
+###
+# Caluclates the next initial node for the n player game, given a mixed strategy equilibrium for the m-1 player game, xi,
+# according to the proof to lemma 2 on page 4 of Robert Wilson's paper
+#
+# INPUTS
+# xi: the mixed strategy profile, array dimension N, each element i an array of length S[i], with the sum of each row equal to 1
+# m: the player to calculate the next initial node for
+#
+# RETURNS
+# x_bar: the next initial node
+###
+def get_next_initial_node(xi, m):
+    N = m
+    # First calculate the alpha values and normalize so all boundary conditions are met
+    alpha = calculate_alpha(U, xi)
+    x_bar = [[element / alpha[i] if alpha[i] != 0 else element for element in row] for i, row in enumerate(xi)]
+    # Then renormalize the pure strategy for player m
+    pure_strategy_found = False
+    for i in range(len(x_bar[m])):
+        if x_bar[m][i] != 0:
+            if pure_strategy_found:
+                raise ValueError("Two pure strategies found for player", m)
+            x_bar[m][i] = 1
+            pure_strategy_found = True
+    # Then calculate the beta values and re-normalize so all boundary conditions are met except at player m's pure strategy
+    beta = min([neg_conditional_expected_utility(x_bar, U[m], m, i) for i in range(len(x_bar[m]))])
+    x = [[element * (beta ** (-1/(N-1))) if i != m else element * (beta ** ((N-2)/(N-1))) for element in row] for i, row in enumerate(x_bar)]
+    return x
     
 ###
 # INPUTS
@@ -221,19 +276,32 @@ def calculate_nash_equilibrium(N, S, U):
     # Nash equilibrium for an N-person game following the strategy of Robert Wilson
     print("Calculating Nash Equilibrium...")
     # Fix all strategies randomly for n >= 1
-    x = [[1, .000, .000], [.000, .000, .000], [.000, .000, .000]]# fix_all_strategies(S)
+    x = [[1, .000, .000], [0, 1, .000], [.000, 1, 0]]#fix_all_strategies(S) #
     print("initial randomized strategies", x)
     # Find optimal strategy for player 0
-    initial_node = [best_mixed_response(S, U[0], x, 0), x[1:]] # How do we ensure that best_mixed_response returns a strategy that satisfies len(S[0]) boundary conditions?
+    initial_node = x#[best_mixed_response(S, U[0], x, 0).tolist()] + x[1:] # How do we ensure that best_mixed_response returns a strategy that satisfies len(S[0]) boundary conditions?, look into alpha from paper
     print("initial node", initial_node)
 
+    # alpha = calculate_alpha(U, initial_node, 1)
+    # print("alpha", alpha)
+
+    # x = [[element / alpha[i] if alpha[i] != 0 else element for element in row] for i, row in enumerate(x)]
+    # print("x", x)
+
+    x = get_next_initial_node(initial_node, 1)
+    print("x", x)
+
     boundary_conditions, num_conditions_satisfied, complementary = calculate_all_boundary_conditions(U, x, N)
-    print("boundary conditions", boundary_conditions)
+    print("boundary condition\n" + format_boundary_conditions(boundary_conditions))
     print("num conditions satisfied", num_conditions_satisfied)
     print("complementary", complementary)
 
     # most recently freed player, number of freed players in the game is n + 1
     k = 1
+
+    # x[0][i] = 0 or y[0][i] = 0
+    # player 1 plays j with probability 1
+    # x[1][k != j] = 0     (x[1][k] y[1][k])
 
     while k < N:
         K = sum(len(S[i]) for i in range(k)) # number of strategies for the k player game
