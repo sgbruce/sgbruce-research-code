@@ -3,38 +3,39 @@ from itertools import product
 import numpy as np
 import random
 from scipy.optimize import linprog
-from typing import List, Dict, Callable, Union
+from typing import List, Dict, Callable, Union, Tuple
 
 class Correlated_equilibrium:
-    strategies = []
-    players = []
-    utilities: Dict[str, Callable[[str, Dict[str, int]], float]] = {}
+    strategy_map: List[str] = []
+    strategies: List[int] = []
+    player_map: List[str] = []
+    players: List[int] = []
+    utilities: List[Callable[[List[int]], float]] = []
     distribution: List[Dict[str, Union[float, Dict[str, str]]]] = None
 
-    debug = False
+    debug: bool = False
 
-    def __init__(self, strategies, debug=False):
-        self.strategies = strategies
-        self.players = []
-        self.utilities = {}
+    def __init__(self, strategies: List[str], debug: bool = False):
+        self.strategy_map = strategies
+        self.strategies = [i for i in range(len(strategies))]
         self.debug = debug
-    def get_lambdas(self):
+
+    def get_lambdas(self) -> Dict[str, float]:
         """
         Returns:
         dict: A dictionary of lambda weights for each player to be optimized over.
         """
-        lambdas = {player: 1 for player in self.players}
+        lambdas = {1 for _ in self.players}
         if self.debug:
             print("\nInitial lambdas:\n", lambdas)
         return lambdas
     
-    # Can you make a more succint representation by only tracking your strategy and counts of opponent strategies?
-    def enumerate_strategy_combinations(self):
+    def enumerate_strategy_combinations(self) -> List[List[int]]:
         """
         Enumerates all possible combinations of strategies for each player.
         
         Returns:
-        list: A list of dicts, where each dict represents a combination of strategies with keys being players and values their strategy.
+        list: A list of lists, where each list represents a combination of strategies with indices being players and values their strategy.
         """
         # Check if there are players and strategies
         if not self.players or not self.strategies:
@@ -44,25 +45,22 @@ class Correlated_equilibrium:
         player_strategies = [self.strategies for _ in self.players]
         # Use itertools.product to generate all combinations
         combinations = list(product(*player_strategies))
-        combinations = [{self.players[i]: combination[i] for i in range(len(combination))} for combination in combinations]
         if self.debug:
             print("\nAll strategy combinations:", combinations)
         return combinations
     
-    def build_strategy_counts(self, player, profile):
+    def get_all_strategy_profiles(self) -> List[Dict[str, str]]:
         """
-        Builds a dictionary of frequency counts for each strategy.
-        
         Returns:
-        dict: A dictionary of strategy counts.
+        list: A list of dicts, where each dict represents a combination of strategies with keys being players and values their strategy.
         """
-        strategy_counts = {strategy: 0 for strategy in self.strategies}
-        for p in profile.keys():
-            if p != player:
-                strategy_counts[profile[p]] += 1
-        return strategy_counts
+        all_combinations = self.enumerate_strategy_combinations()
+        strategy_profiles = [{self.player_map[i]: self.strategy_map[strategy] for i, strategy in enumerate(combination)} for combination in all_combinations]
+        if self.debug:
+            print("\nAll strategy profiles:", strategy_profiles)
+        return strategy_profiles
     
-    def build_ic_constraints(self):
+    def build_ic_constraints(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Builds the inequality constraints for the linear program.
         
@@ -87,8 +85,8 @@ class Correlated_equilibrium:
                         for index, dist_entry in enumerate(self.distribution):
                             profile = dist_entry["strategy"]
                             if profile[player] == strategy:
-                                player_utility = self.utilities[player](strategy, self.build_strategy_counts(player, profile))
-                                deviation_utility = self.utilities[player](alternate_strategy, self.build_strategy_counts(player, profile))
+                                player_utility = self.utilities[player](profile)
+                                deviation_utility = self.utilities[player]({**profile, player: alternate_strategy})
                                 A_ub[constraint_index][index] = deviation_utility - player_utility
                         constraint_index += 1
         if self.debug:
@@ -98,6 +96,9 @@ class Correlated_equilibrium:
         
     
     def initialize_distribution(self):
+        """
+        Initializes the distribution with equal probability for each strategy combination.
+        """
         all_combinations = self.enumerate_strategy_combinations()
         # initialize distribution with equal probability for each combination
         self.distribution = [{"probability": 1 / len(all_combinations), "strategy": combination} for combination in all_combinations]
@@ -105,6 +106,9 @@ class Correlated_equilibrium:
             print("\nDistribuiton initialized:\n", "\n".join([str(row) for row in self.distribution]))
 
     def optimize_distribution(self):
+        """
+        Optimizes the distribution using linear programming.
+        """
         # create a linear program
         if not self.distribution:
             self.initialize_distribution()
@@ -116,7 +120,7 @@ class Correlated_equilibrium:
             for player in self.players:
                 # for each player, calculate the utility of their strategy given the frequency of the opponent's strategies
                 # add to total utility weighted by player's lambda weight
-                player_utility = self.utilities[player](profile[player], self.build_strategy_counts(player, profile))
+                player_utility = self.utilities[player](profile)
                 weighted_strategy_utility += lambdas[player] * player_utility
             if self.debug:
                 print("\nWeighted strategy utility for profile", profile, ":", weighted_strategy_utility)
@@ -136,8 +140,15 @@ class Correlated_equilibrium:
         if self.debug:
             print("\nResult of optimization:\n", "\n".join([str(round(res.x[i], 3)) + " " + str(self.distribution[i]["strategy"]) for i in range(len(res.x))]))
         self.distribution = [{"probability": res.x[i], "strategy": self.distribution[i]["strategy"]} for i in range(len(self.distribution))]
+        return self.distribution
 
-    def sample_distribution(self):
+    def sample_distribution(self) -> Dict[str, str]:
+        """
+        Samples a strategy from the distribution.
+        
+        Returns:
+        dict: A dictionary of {player: strategy} representing the sampled strategy.
+        """
         if not self.distribution:
             self.optimize_distribution()
         sample = random.uniform(0, 1)
@@ -153,41 +164,14 @@ class Correlated_equilibrium:
         print("WARNING: Rounding errors in sampling distribution, sum of probabilities is less than 1. Returning last strategy.")
         return self.distribution[-1]["strategy"]
 
-    def add_player(self, player, utility_function):
-        self.players.append(player)
-        self.utilities[player] = utility_function
+    def add_player(self, player: str, utility_function: Callable[[List[int]], float]):
+        """
+        Adds a player to the game with their utility function. Assumes strategies are the same for each player.
+        """
+        self.player_map.append(player)
+        self.players.append(len(self.players))
+        self.utilities.append(utility_function)
         self.distribution = None
 
-def test_utility_function(player_strategy: str, opponent_strategies: Dict[str, int]) -> float:
-    return opponent_strategies[player_strategy] - sum([opponent_strategies[i] if i != player_strategy else 0 for i in opponent_strategies.keys()])
-
-
-def test_strategy_enumeration():
-    ce = Correlated_equilibrium(["a", "b", "c"])
-    ce.add_player("1", lambda x: x)
-    ce.add_player("2", lambda x: x)
-    ce.add_player("3", lambda x: x)
-    print(ce.enumerate_strategy_combinations())
-
-def prof_bryce_example(): 
-    def player_1_utility(player_strategy, opponent_strategies):
-        if player_strategy == "L":
-            return 3 if opponent_strategies["L"] > opponent_strategies["R"] else 1
-        else:
-            return 2 if opponent_strategies["L"] > opponent_strategies["R"] else 7
-    def player_2_utility(player_strategy, opponent_strategies):
-        if player_strategy == "L":
-            return 4 if opponent_strategies["L"] > opponent_strategies["R"] else 6
-        else:
-            return 8 if opponent_strategies["L"] > opponent_strategies["R"] else 5
-        
-    ce = Correlated_equilibrium(["L", "R"], True)
-    ce.add_player("P1", player_1_utility)
-    ce.add_player("P2", player_2_utility)
-    ce.initialize_distribution()
-    ce.optimize_distribution()
-
-    print(ce.sample_distribution())
-
 if __name__ == "__main__":
-    prof_bryce_example()
+    pass
