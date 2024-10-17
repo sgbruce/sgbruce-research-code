@@ -39,8 +39,8 @@ def dominant_strategy_example(Correlated_equilibrium, debug: bool = False):
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     for strategy in distribution:
         if(strategy["strategy"] == {"P1": "R", "P2": "R"}):
@@ -64,8 +64,8 @@ def prof_bryce_example(Correlated_equilibrium, debug: bool = False):
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     for strategy in distribution:
         if(strategy["strategy"] == {"P1": "L", "P2": "L"}):
@@ -95,8 +95,8 @@ def game_of_chicken_example(Correlated_equilibrium, debug: bool = False):
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     for strategy in distribution:
         if(strategy["strategy"] == {"P1": "D", "P2": "D"}):
@@ -134,8 +134,8 @@ def three_player_game_with_dominant_strategy(Correlated_equilibrium, debug: bool
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     for strategy in distribution:
         if(strategy["strategy"] == {"P1": "a", "P2": "a", "P3": "a"}):
@@ -167,8 +167,8 @@ def three_player_game_with_mixed_equilibria(Correlated_equilibrium, debug: bool 
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     expected = [{'probability': 0.05042016806722689, 'strategy': {'P1': 'r', 'P2': 'r', 'P3': 'r'}}, {'probability': 0.0, 'strategy': {'P1': 'r', 'P2': 'r', 'P3': 'p'}}, 
                 {'probability': 0.0, 'strategy': {'P1': 'r', 'P2': 'r', 'P3': 's'}}, {'probability': 0.0, 'strategy': {'P1': 'r', 'P2': 'p', 'P3': 'r'}}, 
@@ -226,8 +226,8 @@ def dominant_strategy_example_fast(Correlated_equilibrium, debug: bool = False):
     ce.initialize_distribution()
     distribution = ce.optimize_distribution()
 
-    if debug:
-        print(distribution)
+    # if debug:
+    #     print(distribution)
 
     for strategy in distribution:
         if(strategy["strategy"] == {"P1": "R", "P2": "R"}):
@@ -235,6 +235,32 @@ def dominant_strategy_example_fast(Correlated_equilibrium, debug: bool = False):
         else:
             assert(strategy["probability"] == 0), "P1 and P2 both not playing R should have probability 0"
     print("Prof Bryce dominant strategy example passed\n")
+
+def three_player_game_with_dominant_strategy_fast(Correlated_equilibrium, debug: bool = False):
+    def get_player_utility(player: str) -> Callable[[Dict[str, str]], float]:
+        all_players = ["P1", "P2", "P3"]
+        other_players = [p for p in all_players if p != player]
+
+        u_1 = [[[4, 1, 2], [2, 3, 1], [1, 2, 3]], [[2, 2, 1], [1, 3, 2], [2, 1, 3]], [[1, 1, 3], [1, 2, 3], [3, 1, 2]]]
+        u_2 = [[[4, 1, 2], [2, 3, 1], [1, 2, 3]], [[3, 2, 1], [1, 3, 2], [2, 1, 3]], [[2, 1, 3], [1, 2, 3], [3, 1, 2]]]
+        u_3 = [[[4, 1, 2], [2, 3, 1], [1, 2, 3]], [[3, 2, 1], [1, 3, 2], [2, 1, 3]], [[2, 1, 3], [1, 2, 3], [3, 1, 2]]]
+        return u_1 if player == "P1" else u_2 if player == "P2" else u_3
+
+    ce = Correlated_equilibrium(["a", "b", "c"], debug)
+    for player in ["P1", "P2", "P3"]:
+        ce.add_player(player, get_player_utility(player))
+    ce.initialize_distribution()
+    distribution = ce.optimize_distribution()
+
+    # if debug:
+    #     print(distribution)
+
+    for strategy in distribution:
+        if(strategy["strategy"] == {"P1": "a", "P2": "a", "P3": "a"}):
+            assert(strategy["probability"] == 1), "P1, P2, and P3 all playing a should have probability 1"
+        else:
+            assert(strategy["probability"] == 0), "P1, P2, and P3 all not playing a should have probability 0"
+    print("Three player game with dominant strategy passed\n")
 
     
 
@@ -264,7 +290,7 @@ if __name__ == "__main__":
     """
     # 3 player game where P(a,a,a) = 1
     print("Testing 3 player game with dominant strategy...")
-    three_player_game_with_dominant_strategy(ce_basic)
+    three_player_game_with_dominant_strategy(ce_basic, True)
 
     # 3 playerr game with mixed equilibria
     print("Testing 3 player game with mixed equilibria...") # not working
@@ -276,3 +302,6 @@ if __name__ == "__main__":
 
     print("Testing dominant strategy example...")
     dominant_strategy_example_fast(ce_fast)
+
+    print("Testing 3 player game with dominant strategy...")
+    three_player_game_with_dominant_strategy_fast(ce_fast, True)

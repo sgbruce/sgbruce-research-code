@@ -5,6 +5,24 @@ import random
 from scipy.optimize import linprog
 from typing import List, Dict, Callable, Union, Tuple
 
+def check_equality(A: np.ndarray, B: np.ndarray) -> bool:
+    """
+    Checks if two matrices have the same rows.
+    """
+    if A.shape != B.shape:
+        print("Matrices have different shapes:", A.shape, B.shape)
+        return False
+
+    # Convert rows to sets of tuples for comparison
+    set_A = {tuple(row) for row in A}
+    set_B = {tuple(row) for row in B}
+
+    if(len(set_A) != len(set_B)):
+        print("Matrices have different number of rows:", len(set_A), len(set_B))
+        return False
+
+    return set_A == set_B
+
 class Correlated_equilibrium:
     debug: bool = False
 
@@ -41,7 +59,7 @@ class Correlated_equilibrium:
         # Create a list of strategies for each player
         player_strategies = [self.strategies for _ in self.players]
         # Use itertools.product to generate all combinations
-        combinations = list(product(*player_strategies))
+        combinations = [list(entry) for entry in product(*player_strategies)]
         if self.debug:
             print("\nAll strategy combinations:", combinations)
         return combinations
@@ -80,27 +98,30 @@ class Correlated_equilibrium:
         num_variables = len(self.distribution)
         A_ub = np.zeros((num_constraints, num_variables))
         b_ub = np.zeros(num_constraints)
-        return A_ub, b_ub
-        constraint_index = 0
-        for player in self.players:
-            for strategy in self.strategies:
+
+        # each row in the A_ub matrix corresponds to a constraint for a given player to play a given strategy vs an alternate strategy, 
+        # where there is an entry for each strategy profile. the value of any index of the row is non-zero iff in the profile you are signaled to 
+        # play the given strategy, and the value is the difference in utility between the alternate strategy and the signaled strategy
+        #
+        # The index of each row is indexed by player, strategy, then alternate strategy.
+        #
+        # If a row times the probability distribution vector is positive, it means that deviation given that strategy is a utility benefit, 
+        # so we constrain it to be less than or equal to 0
+        for index, dist_entry in enumerate(self.distribution):
+            for player in self.players:
+                profile = dist_entry[1].copy()
+                player_utility = self.utilities[player, *profile]
+                strategy = profile[player]
                 for alternate_strategy in self.strategies:
-                    # each row in the A_ub matrix corresponds to a constraint for a given player to play a given strategy vs an alternate strategy, 
-                    # where there is an entry for each strategy profile. the value of any index of the row is non-zero iff in the profile you are signaled to 
-                    # play the given strategy, and the value is the difference in utility between the alternate strategy and the signaled strategy
-                    #
-                    # If a row times the probability distribution vector is positive, it means that deviation given that strategy is a utility benefit, 
-                    # so we constrain it to be less than or equal to 0
-                    if strategy != alternate_strategy:
-                        for index, dist_entry in enumerate(self.distribution):
-                            profile = dist_entry["strategy"]
-                            if profile[player] == strategy:
-                                player_utility = self.utilities[player](profile)
-                                deviation_utility = self.utilities[player]({**profile, player: alternate_strategy})
-                                A_ub[constraint_index][index] = deviation_utility - player_utility
-                        constraint_index += 1
+                    if alternate_strategy != strategy:
+                        profile[player] = alternate_strategy
+                        deviation_utility = self.utilities[player, *profile]
+                        alt_index = alternate_strategy - 1 if alternate_strategy > strategy else alternate_strategy
+                        constraint_index = player * len(self.strategies) * (len(self.strategies) - 1) + strategy * (len(self.strategies) - 1) + alt_index
+                        A_ub[constraint_index][index] = deviation_utility - player_utility
+
         if self.debug:
-            print("\nA_ub:\n", [",".join([str(round(x, 3)) for x in row]) + "\n" for row in A_ub])
+            print("\nA_ub:\n", "\n".join(["[" + ",".join([str(round(x, 3)) for x in row]) + "]" for row in A_ub]))
             print("\nb_ub:\n", b_ub)
         return A_ub, b_ub
         
@@ -183,3 +204,31 @@ class Correlated_equilibrium:
 
 if __name__ == "__main__":
     pass
+
+
+
+
+### Alternate IC constraint matrix construction
+"""
+A_ub2 = np.zeros((num_constraints, num_variables))
+        # METHOD 1
+        constraint_index = 0
+        for player in self.players:
+            for strategy in self.strategies:
+                for alternate_strategy in self.strategies:
+                    # each row in the A_ub matrix corresponds to a constraint for a given player to play a given strategy vs an alternate strategy, 
+                    # where there is an entry for each strategy profile. the value of any index of the row is non-zero iff in the profile you are signaled to 
+                    # play the given strategy, and the value is the difference in utility between the alternate strategy and the signaled strategy
+                    #
+                    # If a row times the probability distribution vector is positive, it means that deviation given that strategy is a utility benefit, 
+                    # so we constrain it to be less than or equal to 0
+                    if strategy != alternate_strategy:
+                        for index, dist_entry in enumerate(self.distribution):
+                            profile = dist_entry[1].copy()
+                            if profile[player] == strategy:
+                                player_utility = self.utilities[player, *profile]
+                                profile[player] = alternate_strategy
+                                deviation_utility = self.utilities[player, *profile]
+                                A_ub2[constraint_index][index] = deviation_utility - player_utility
+                    constraint_index += 1
+"""

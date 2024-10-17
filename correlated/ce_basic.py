@@ -87,7 +87,7 @@ class Correlated_equilibrium:
                                 A_ub[constraint_index][index] = deviation_utility - player_utility
                         constraint_index += 1
         if self.debug:
-            print("\nA_ub:\n", [",".join([str(round(x, 3)) for x in row]) + "\n" for row in A_ub])
+            print("\nA_ub:\n", "\n".join(["[" + ",".join([str(round(x, 3)) for x in row]) + "]" for row in A_ub]))
             print("\nb_ub:\n", b_ub)
         return A_ub, b_ub
         
