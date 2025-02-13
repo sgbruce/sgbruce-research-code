@@ -275,7 +275,7 @@ if __name__ == "__main__":
     """
     # dominant strategy example where P(R,R) = 1
     print("Testing dominant strategy example...")
-    dominant_strategy_example(ce_basic)
+    dominant_strategy_example(ce_basic, True)
 
     # prof bryce example from youtube video
     print("Testing prof bryce example...")
@@ -290,7 +290,7 @@ if __name__ == "__main__":
     """
     # 3 player game where P(a,a,a) = 1
     print("Testing 3 player game with dominant strategy...")
-    three_player_game_with_dominant_strategy(ce_basic, True)
+    three_player_game_with_dominant_strategy(ce_basic)
 
     # 3 playerr game with mixed equilibria
     print("Testing 3 player game with mixed equilibria...") # not working
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     test_strategy_enumeration_fast(ce_fast)
 
     print("Testing dominant strategy example...")
-    dominant_strategy_example_fast(ce_fast)
+    dominant_strategy_example_fast(ce_fast, True)
 
     print("Testing 3 player game with dominant strategy...")
     three_player_game_with_dominant_strategy_fast(ce_fast, True)

@@ -87,6 +87,22 @@ class Correlated_equilibrium:
         """
         return [{"probability": dist_entry[0], "strategy": self.map_list_to_profile(dist_entry[1])} for dist_entry in dist]
     
+    def get_utility_from_profile(self, utility: np.ndarray, profile: list[int]) -> float:
+        """
+        Gets the utility from a profile.
+        """
+        value = utility
+        for v in profile:
+            value = value[v]
+
+        return value
+    
+    def get_all_utilities_from_profile(self, profile: list[int]) -> list[float]:
+        """
+        Gets the utility from a profile for all players.
+        """
+        return [self.get_utility_from_profile(player_utility, profile) for player_utility in self.utilities]
+    
     def build_ic_constraints(self) -> Tuple[np.ndarray, np.ndarray]:
         """
         Builds the inequality constraints for the linear program.
@@ -110,12 +126,12 @@ class Correlated_equilibrium:
         for index, dist_entry in enumerate(self.distribution):
             for player in self.players:
                 profile = dist_entry[1].copy()
-                player_utility = self.utilities[player, *profile]
+                player_utility = self.get_utility_from_profile(self.utilities[player], profile)
                 strategy = profile[player]
                 for alternate_strategy in self.strategies:
                     if alternate_strategy != strategy:
                         profile[player] = alternate_strategy
-                        deviation_utility = self.utilities[player, *profile]
+                        deviation_utility = self.get_utility_from_profile(self.utilities[player], profile)
                         alt_index = alternate_strategy - 1 if alternate_strategy > strategy else alternate_strategy
                         constraint_index = player * len(self.strategies) * (len(self.strategies) - 1) + strategy * (len(self.strategies) - 1) + alt_index
                         A_ub[constraint_index][index] = deviation_utility - player_utility
@@ -147,7 +163,7 @@ class Correlated_equilibrium:
         outcome_utility_sums = []
         for dist_entry in self.distribution:
             profile = dist_entry[1]
-            weighted_strategy_utility = np.dot(lambdas, self.utilities[:, *profile])
+            weighted_strategy_utility = np.dot(lambdas, self.get_all_utilities_from_profile(profile))
             if self.debug:
                 print("\nWeighted strategy utility for profile", profile, ":", weighted_strategy_utility)
             outcome_utility_sums.append(weighted_strategy_utility)

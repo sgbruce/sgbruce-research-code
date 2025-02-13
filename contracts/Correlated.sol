@@ -12,18 +12,24 @@ contract CorrelatedPlanner {
         string strategy;
     }
 
+    // Keep track of strategies, both as integers for optimized computing and as strings for human readability
     mapping(string => uint) private strategy_map;
     string[] private strategy_list;
     uint[] private strategies;
+
+    // Keep track of players, both as addresses for identification and as integers for optimized computing
     mapping(address => uint) private player_map;
     address[] private player_list;
     uint[] private players;
+
+    // Keep track of utilities for each player and strategy combination
     int[][][] private utilities;
 
+    // Keep track of the probability distribution over strategy combinations
     uint[] private probabilities;
     uint[][] private combinations;
 
-    // Initialize a contract with the pricipal, agent, and given outcomes
+    // Initialize a contract with the set of strategies
     constructor(string[] memory _strategies){ // Estimated creation cost: infinite gas Estimated code deposit cost: 1289400 gas
         for(uint i = 0; i < _strategies.length; i++){
             strategy_map[_strategies[i]] = i;
@@ -37,6 +43,7 @@ contract CorrelatedPlanner {
         combinations = new uint[][](0);
     }
 
+    // Enumerate all possible strategy combinations over the set of players
     function enumerate_strategy_combinations() internal view returns (uint[][] memory) { // Estimated execution cost: infinite gas
         uint num_players = players.length;
         uint num_strategies = strategies.length;
@@ -57,11 +64,13 @@ contract CorrelatedPlanner {
         return new_combinations;
     }
 
+    // Get all strategy combinations, for testing purposes
     function get_all_strategy_profiles() public view returns (uint[][] memory) { // Estimated execution cost: infinite gas
         uint[][] memory all_combinations = enumerate_strategy_combinations();
         return all_combinations;
     }
 
+    // Map a list of strategy indices to a list of profiles, for human readability and testing purposes
     function map_list_to_profile(uint[] memory profile_list) internal view returns (ProfileEntry[] memory) { // Estimated execution cost: undefined gas
         ProfileEntry[] memory profile = new ProfileEntry[](profile_list.length);
         for (uint i = 0; i < profile_list.length; i++) {
@@ -70,6 +79,7 @@ contract CorrelatedPlanner {
         return profile;
     }
 
+    // Build the constraints for the linear program, one for each player's alternate strategy to a signalled strategy
     function build_ic_constraints() internal view returns (int[][] memory, int[] memory) { // Estimated execution cost: infinite gas
         uint num_constraints = players.length * strategies.length * (strategies.length - 1);
         uint num_variables = combinations.length;
@@ -101,6 +111,7 @@ contract CorrelatedPlanner {
         return (A_ub, b_ub);
     }
 
+    // Initialize the distribution with equal probability for each strategy combination
     function initialize_distribution() internal { // Estimated execution cost: infinite gas
         uint[][] memory all_combinations = enumerate_strategy_combinations();
         probabilities = new uint[](all_combinations.length);
@@ -111,6 +122,7 @@ contract CorrelatedPlanner {
         }
     }
 
+    // Get the lambdas for the linear program, currently set to equal weights
     function get_lambdas() internal view returns (int[] memory) { // Estimated execution cost: infinite gas
         int[] memory lambdas = new int[](players.length);
         for(uint i = 0; i < lambdas.length; i++){
@@ -119,6 +131,7 @@ contract CorrelatedPlanner {
         return lambdas;
     }
 
+    // Optimize the distribution using linear programming
     function optimize_distribution() public payable returns (int[] memory) { // Estimated execution cost: infinite gas
         if(combinations.length == 0) {
             initialize_distribution();
