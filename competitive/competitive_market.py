@@ -17,7 +17,7 @@ class CompetitiveMarket:
         self.prices = None
 
     def update_market(self, outcomes, prices):
-        self.outcomes = np.array(outcomes)
+        self.outcomes = np.array(outcomes.T)
         self.prices = np.array(prices)
 
     def print_market(self):

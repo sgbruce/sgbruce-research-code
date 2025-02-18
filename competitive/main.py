@@ -52,8 +52,8 @@ def competitive_equilibrium(m):
 
 if __name__ == "__main__":
     # Given W matrix
-    W = np.array([[2,2],[2,2],[2,2]])
-    a = [0.25, 0.5, 0.75]
+    W = np.array([[2,2],[2,2],[2,2], [2,2], [2,2]])
+    a = [0.5, 0.5, 0.75, 0.75, 0.75]
     market = CompetitiveMarket(W, a)
 
     competitive_equilibrium(market)

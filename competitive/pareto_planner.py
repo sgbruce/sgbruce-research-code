@@ -2,6 +2,8 @@
 This code attempts to find the competitive equilibrium of a market with multiple agents. Each agent has a Cobb-Douglas utility function.
 It attempts to find the pareto weights that correspond to the competitive equilibrium, which is guaranteed to exist via the first welfare theorem.
 Currently not working becuase the objective is not accurately representing the utility functions since the objective is not linear...
+
+CE problem is shown to be PPAD-complete, so using CE to find the pareto weights or vice versa is not feasible in polynomial time.
 '''
 
 import numpy as np
