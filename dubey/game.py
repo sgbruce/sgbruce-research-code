@@ -62,7 +62,7 @@ class DubeyPlayer:
         self.goods -= s.executed_sell_quantity()
         self.goods += s.executed_buy_quantity()
 
-    def choose_strategy(self):
+    def sample_strategy(self):
         return random.choice(self.strategies)
     
     def update_strategies(self):
@@ -101,7 +101,7 @@ class DubeyGame:
         self.update_strategies()
         bids = []
         for player in self.players:
-            bids.append(player.choose_strategy())
+            bids.append(player.sample_strategy())
         self.active_bids = bids
         return bids
     

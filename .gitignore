@@ -2,3 +2,6 @@ contracts/artifacts/
 nash/__pycache__/
 correlated/__pycache__/
 .DS_Store
+no_regret/regenv/
+no_regret/__pycache__/
+no_regret/training_data_*.json
