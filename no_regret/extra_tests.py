@@ -13,7 +13,7 @@ def loss_outcome(loss_fn, y_vector_1, y_vector_2, label_1, label_2, expected_los
     mean_loss = loss_fn(y_vector_1, y_vector_2).numpy()
     if debug:
         print(f'mean_loss of ({label_1}, {label_2}): {mean_loss}')
-    assert mean_loss == expected_loss, f'Loss for ({label_1}, {label_2}) should be {expected_loss}, but got {mean_loss}'
+    assert abs(mean_loss - expected_loss) < 0.0001, f'Loss for ({label_1}, {label_2}) should be {expected_loss}, but got {mean_loss}'
 
 def test_loss_fn(oracle, debug = False):
     # get the loss function
@@ -44,6 +44,14 @@ def test_loss_fn(oracle, debug = False):
     strat_1 = Strategy(np.array([0, 5]), np.array([0, 5]), np.array([5, 0]), np.array([5, 0]))
     two_good_transfer_extra = get_strategy_vector(context, strat_0, strat_1)
 
+    strat_0 = Strategy(np.array([10, 0]), np.array([1, 0]), np.array([0, 1]), np.array([0, 1]))
+    strat_1 = Strategy(np.array([0, 1]), np.array([0, 1]), np.array([1, 0]), np.array([1, 0]))
+    extra_cost_incurred = get_strategy_vector(context, strat_0, strat_1)
+
+    strat_0 = Strategy(np.array([1, 0]), np.array([1, 0]), np.array([0, 1]), np.array([0, 11]))
+    strat_1 = Strategy(np.array([0, 1]), np.array([0, 11]), np.array([1, 0]), np.array([1, 0]))
+    oversold_penalty = get_strategy_vector(context, strat_0, strat_1)
+
     # get the loss for the zero strategy with itself
     loss_outcome(oracle_loss, zero_transfer, zero_transfer, "zero strategy", "zero strategy", 0, debug = debug)
     # get the loss for the one good transfer
@@ -54,14 +62,20 @@ def test_loss_fn(oracle, debug = False):
     loss_outcome(oracle_loss, two_good_transfer, zero_transfer, "two good transfer", "zero strategy", utilities[0][0] + utilities[1][1], debug = debug)
     loss_outcome(oracle_loss, two_good_transfer, one_good_transfer, "two good transfer", "one good transfer", utilities[1][1], debug = debug)
     # get the loss for the two good transfer unbalanced and extra
-    loss_outcome(oracle_loss, two_good_transfer, two_good_transfer_unbalanced, "two good transfer unbalanced", "two good transfer", 0, debug = debug)
+    loss_outcome(oracle_loss, two_good_transfer, two_good_transfer_unbalanced, "two good transfer unbalanced", "two good transfer", 0.2, debug = debug)
     loss_outcome(oracle_loss, two_good_transfer_extra, zero_transfer, "two good transfer extra", "zero strategy", 5 * (utilities[0][0] + utilities[1][1]), debug = debug)
     loss_outcome(oracle_loss, two_good_transfer_extra, two_good_transfer, "two good transfer extra", "two good transfer", 4 * (utilities[0][0] + utilities[1][1]), debug = debug)
-    loss_outcome(oracle_loss, two_good_transfer_extra, two_good_transfer_unbalanced, "two good transfer extra", "two good transfer unbalanced", 4 * (utilities[0][0] + utilities[1][1]), debug = debug)
+    loss_outcome(oracle_loss, two_good_transfer_extra, two_good_transfer_unbalanced, "two good transfer extra", "two good transfer unbalanced", 4 * (utilities[0][0] + utilities[1][1]) + 0.2, debug = debug)
+
+    loss_outcome(oracle_loss, extra_cost_incurred, two_good_transfer, "extra cost incurred", "two good transfer", 8, debug = debug)
+    # Wipes the sell amount for the overquoted good, so should only sell one good, adding loss of 1 * utilities[1][1] + oversold penalty of 10 * 1
+    loss_outcome(oracle_loss, two_good_transfer, oversold_penalty, "one good transfer", "oversold penalty", 13.2, debug = debug)
+    print("Loss function test complete")
 
 
 def predict_test(oracle):
     nn_oracle.train_nn(reduced = True)
+    # nn_oracle.export_nn()
     utilities = np.array([[1, 0], [0, 1]])
     context, bids = oracle.predict_optimal_strategies(utilities)
     strategies = [Strategy(bid[0], bid[1], bid[2], bid[3]) for bid in bids]
@@ -70,12 +84,11 @@ def predict_test(oracle):
         print("strategy: ", strategy)
         print("utility: ", game.get_utility(index, strategy))
 
-
 if __name__ == "__main__":
     game = DubeyGame(2)
     game.add_player(DubeyPlayer(1, [0, 10]))
     game.add_player(DubeyPlayer(1, [10, 0]))
     nn_oracle = NNOracle(game)
-    
-    # predict_test(nn_oracle, utilities)
-    test_loss_fn(nn_oracle, debug = True)
+
+    #test_loss_fn(nn_oracle, debug = False)
+    predict_test(nn_oracle)

@@ -238,24 +238,6 @@ class DubeyGame:
 
             buy_ordering = tf.argsort(buy_prices, direction='DESCENDING')
             sell_ordering = tf.argsort(sell_prices)
-
-            # indices = tf.range(num_players, dtype=tf.float32)
-            # indices = tf.reshape(indices, (-1, 1))
-
-            # buy_bids = tf.map_fn(lambda x: (x[0], x[1]), (indices, buy_bids))
-            # sell_bids = tf.map_fn(lambda x: (x[0], x[1]), (indices, sell_bids))
-
-            # tf.print(buy_bids)
-            # tf.print(sell_bids)
-            # tf.print(buy_ordering)
-            # tf.print(sell_ordering)
-
-            # # Sort buy bids by price descending (highest price first)
-            # buy_bids = tf.gather(buy_bids, tf.argsort(buy_bids[:][1][0][good], direction='DESCENDING'))
-            # # Sort sell bids by price ascending (lowest price first)
-            # sell_bids = tf.gather(sell_bids, tf.argsort(sell_bids[:, 1, 2, good]))
-
-
             # Initialize indices for buyers and sellers
             buy_index = 0
             sell_index = 0
