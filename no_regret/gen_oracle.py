@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 import cvxpy as cp
 import itertools
-
+import time
 # === Custom Trading Environment ===
 class BidTradingEnv:
     def __init__(self, endowments, cobb_douglas_exponents):
@@ -19,99 +19,131 @@ class BidTradingEnv:
     def step(self, bids: tf.Tensor):
         # bids = list of (buy_price, buy_qty, sell_price, sell_qty) * num_goods per agent
         executed_bids = self.match_trades(bids)
+        endowments = tf.cast(self.endowments, dtype=tf.float32)
         # build allocations as purchase amount + endowment - sell amount
-        allocations = []
-        for i in range(self.num_players):
-            allocation = []
-            for j in range(self.num_goods):
-                allocation.append(executed_bids[i, 1, j] + self.endowments[i, j] - executed_bids[i, 3, j])
-            allocations.append(allocation)
+        bought_prices = tf.squeeze(executed_bids[:, 0, :]) # Shape: (num_players, num_goods)
+        bought_quantities = tf.squeeze(executed_bids[:, 1, :]) # Shape: (num_players, num_goods)
+        sold_prices = tf.squeeze(executed_bids[:, 2, :]) # Shape: (num_players, num_goods)
+        sold_quantities = tf.squeeze(executed_bids[:, 3, :])   # Shape: (num_players, num_goods)
 
-        net_credit = []
-        for i in range(self.num_players):
-            net_credit.append(np.sum(executed_bids[i, 3] * executed_bids[i, 2] - executed_bids[i, 1] * executed_bids[i, 0]))
+        # Calculate allocations element-wise using TensorFlow
+        allocations = bought_quantities + endowments - sold_quantities # Shape: (num_players, num_goods)
+        net_credit = tf.reduce_sum(sold_prices * sold_quantities - bought_prices * bought_quantities, axis=1) # Shape: (num_players,)
 
         rewards = self.compute_utilities(allocations, net_credit)
 
-        valid_bids = []
-        for i in range(self.num_players):
-            bid = bids[i].numpy()
-            if np.any(bid < 0) or np.any((self.endowments[i] - bid[3]) < 0):
-                valid_bids.append(False)
-            else:
-                valid_bids.append(True)
+        sell_quantities = tf.squeeze(bids[:, 3, :])
+        valid_bids = tf.reduce_all(tf.logical_and(tf.reduce_all(bids >= 0, axis=(1, 2)), tf.reduce_all(endowments - sell_quantities >= 0, axis=1)))
+        valid_bids = tf.cast(valid_bids, tf.bool)
 
         return None, rewards, True, {"executed_bids": executed_bids, "allocations": allocations, "valid_bids": valid_bids, "net_credit": net_credit}
 
+    @tf.function
     def match_trades(self, bids):
-        num_players, _, num_goods = bids.shape
+        """
+        Computes the net buy/sell quantities and average prices for each player and good.
+
+        Args:
+            bids: A tensor of shape (num_players, 4, num_goods), where:
+                - bids[:, 0, g] = buy price for good g
+                - bids[:, 1, g] = buy quantity for good g
+                - bids[:, 2, g] = sell price for good g
+                - bids[:, 3, g] = sell quantity for good g
+
+        Returns:
+            output_bids: A tensor of shape (num_players, 4, num_goods) with:
+                - output[:, 0, g] = average buy price for good g
+                - output[:, 1, g] = total bought quantity
+                - output[:, 2, g] = average sell price
+                - output[:, 3, g] = total sold quantity
+        """
+        num_players = tf.shape(bids)[0]
+        num_goods = tf.shape(bids)[2]
         output_bids = tf.zeros((num_players, 4, num_goods), dtype=tf.float32)
-        def execute_trade(index, good, quantity, price, buy):
-            if buy:
-                new_quantity = output_bids[index, 1, good] + quantity
-                new_price = (output_bids[index, 0, good] * output_bids[index, 1, good] + price * quantity) / new_quantity
-                new_bids = tf.tensor_scatter_nd_update(output_bids, [[index, 1, good]], [new_quantity])
-                new_bids = tf.tensor_scatter_nd_update(new_bids, [[index, 0, good]], [new_price])
-            else:
-                new_quantity = output_bids[index, 3, good] + quantity
-                new_price = (output_bids[index, 2, good] * output_bids[index, 3, good] + price * quantity) / new_quantity
-                new_bids = tf.tensor_scatter_nd_update(output_bids, [[index, 3, good]], [new_quantity])
-                new_bids = tf.tensor_scatter_nd_update(new_bids, [[index, 2, good]], [new_price])
-            return new_bids
+        eps = tf.constant(1e-8, dtype=tf.float32)
 
-        for good in range(num_goods):
-            # Separate buy and sell bids for the current good, index 1 is buy quantity, index 3 is sell quantity
-            buy_mask = bids[:, 1, good] > 0
-            sell_mask = bids[:, 3, good] > 0
-            buy_bids = tf.boolean_mask(bids, buy_mask)
-            sell_bids = tf.boolean_mask(bids, sell_mask)
+        def weighted_avg_price(old_price, old_qty, new_price, new_qty):
+            total_qty = old_qty + new_qty
+            safe_qty = tf.maximum(total_qty, eps)
+            return (old_price * old_qty + new_price * new_qty) / safe_qty
 
-            if buy_bids.shape[0] == 0 or sell_bids.shape[0] == 0:
-                continue
+        def execute_trade(output, index, good, qty, price, is_buy):
+            price_idx = 0 if is_buy else 2
+            qty_idx = 1 if is_buy else 3
 
+            old_qty = output[index, qty_idx, good]
+            old_price = output[index, price_idx, good]
+
+            new_qty = old_qty + qty
+            avg_price = weighted_avg_price(old_price, old_qty, price, qty)
+
+            output = tf.tensor_scatter_nd_update(output, [[index, qty_idx, good]], [new_qty])
+            output = tf.tensor_scatter_nd_update(output, [[index, price_idx, good]], [avg_price])
+            return output
+
+        for good in tf.range(num_goods):
             buy_prices = bids[:, 0, good]
             sell_prices = bids[:, 2, good]
 
-            buy_ordering = tf.argsort(buy_prices, direction='DESCENDING')
-            sell_ordering = tf.argsort(sell_prices)
-            # Initialize indices for buyers and sellers
-            buy_index = 0
-            sell_index = 0
-            buyer_index = buy_ordering[buy_index]
-            seller_index = sell_ordering[sell_index]
-            buy_price = bids[buyer_index][0][good]
-            buy_quantity = bids[buyer_index][1][good]
-            sell_price = bids[seller_index][2][good]
-            sell_quantity = bids[seller_index][3][good]
+            buy_order = tf.argsort(buy_prices, direction="DESCENDING")
+            sell_order = tf.argsort(sell_prices)
 
-            # Process bids
-            while buy_index < buy_ordering.shape[0] and sell_index < sell_ordering.shape[0] and buy_price >= sell_price:
-                # Determine the transaction quantity between the buyer and seller
-                transaction_quantity = tf.minimum(buy_quantity, sell_quantity)
-                if transaction_quantity > 0:
-                    buy_quantity -= transaction_quantity
-                    sell_quantity -= transaction_quantity
+            buy_index = tf.constant(0)
+            sell_index = tf.constant(0)
 
-                    # Update quantities
-                    output_bids = execute_trade(buyer_index, good, transaction_quantity, buy_price, True)
-                    output_bids = execute_trade(seller_index, good, transaction_quantity, buy_price, False)
+            buyer_idx = buy_order[buy_index]
+            seller_idx = sell_order[sell_index]
 
-                # Move to the next buyer or seller if their quantity is exhausted
-                if buy_quantity <= 0:
-                    buy_index += 1
-                    if buy_index < buy_ordering.shape[0]:
-                        buyer_index = buy_ordering[buy_index]
-                        buy_price = bids[buyer_index][0][good]
-                        buy_quantity = bids[buyer_index][1][good]
-                if sell_quantity <= 0:
-                    sell_index += 1
-                    if sell_index < sell_ordering.shape[0]:
-                        seller_index = sell_ordering[sell_index]
-                        sell_price = bids[seller_index][2][good]
-                        sell_quantity = bids[seller_index][3][good]
+            buy_price = tf.gather(bids[:, 0, good], buyer_idx)
+            buy_qty = tf.gather(bids[:, 1, good], buyer_idx)
+            sell_price = tf.gather(bids[:, 2, good], seller_idx)
+            sell_qty = tf.gather(bids[:, 3, good], seller_idx)
 
-                # Implement proportional rationing if needed
-                # (This part can be expanded based on specific rules for rationing)
+            def loop_cond(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
+                return tf.logical_and(
+                    tf.logical_and(bi < num_players, si < num_players),
+                    bp >= sp
+                )
+
+            def loop_body(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
+                trade_qty = tf.minimum(bq, sq)
+                should_trade = trade_qty > 0
+
+                def trade():
+                    out = execute_trade(output, b_idx, good, trade_qty, bp, True)
+                    out = execute_trade(out, s_idx, good, trade_qty, bp, False)
+                    return out
+
+                output = tf.cond(should_trade, trade, lambda: output)
+
+                bq = tf.cond(should_trade, lambda: bq - trade_qty, lambda: bq)
+                sq = tf.cond(should_trade, lambda: sq - trade_qty, lambda: sq)
+
+                next_bi = bi + 1
+                has_next_buyer = next_bi < num_players
+                next_buyer_idx = tf.cond(has_next_buyer, lambda: buy_order[next_bi], lambda: b_idx)
+                advance_buyer = tf.logical_and(tf.equal(bq, 0), has_next_buyer)
+
+                bi = tf.cond(tf.equal(bq, 0), lambda: next_bi, lambda: bi)
+                b_idx = tf.cond(advance_buyer, lambda: next_buyer_idx, lambda: b_idx)
+                bp = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 0, good], next_buyer_idx), lambda: bp)
+                bq = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 1, good], next_buyer_idx), lambda: bq)
+
+                next_si = si + 1
+                has_next_seller = next_si < num_players
+                next_seller_idx = tf.cond(has_next_seller, lambda: sell_order[next_si], lambda: s_idx)
+                advance_seller = tf.logical_and(tf.equal(sq, 0), has_next_seller)
+
+                si = tf.cond(tf.equal(sq, 0), lambda: next_si, lambda: si)
+                s_idx = tf.cond(advance_seller, lambda: next_seller_idx, lambda: s_idx)
+                sp = tf.cond(advance_seller, lambda: tf.gather(bids[:, 2, good], next_seller_idx), lambda: sp)
+                sq = tf.cond(advance_seller, lambda: tf.gather(bids[:, 3, good], next_seller_idx), lambda: sq)
+
+                return output, bi, si, b_idx, s_idx, bp, bq, sp, sq
+
+            loop_vars = [output_bids, buy_index, sell_index, buyer_idx, seller_idx, buy_price, buy_qty, sell_price, sell_qty]
+            output_bids, *_ = tf.while_loop(loop_cond, loop_body, loop_vars, maximum_iterations=num_players * 2 + 1)
+
         return output_bids
 
     def compute_utilities(self, allocations, net_credit):
@@ -192,21 +224,23 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     agent_bid = tf.Variable(tf.random.uniform([4, 2], maxval=[[1, 1], endowment, [1, 1], endowment]), dtype=tf.float32)
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.05)
     
-    for epoch in range(200):  # optimization steps
+    for epoch in range(50):  # optimization steps
         with tf.GradientTape() as tape:
             total = 0
             for opp_bids in opponent_samples:
                 all_bids = tf.concat([opp_bids[:player_idx], tf.convert_to_tensor([agent_bid], dtype=tf.float32), opp_bids[player_idx:]], axis=0)
-                _, utils, _, _ = env.step(all_bids)
+                _, utils, _, info = env.step(all_bids) # takes ~0.01s
                 total += utils[player_idx]
             loss = -total / len(opponent_samples)  # maximize expected utility
         grads = tape.gradient(loss, [agent_bid])
         optimizer.apply_gradients(zip(grads, [agent_bid]))
         if debug and epoch % 10 == 0:
-            print("epoch: ", epoch, "loss: ", loss)
-            print("agent_bid: ", agent_bid.numpy())
+            print("\n\nepoch: ", epoch, "loss: ", loss)
+            print("agent_bid: \n", agent_bid.numpy())
+            print("executed_bids: \n", info["executed_bids"].numpy())
+            print("allocations: \n", info["allocations"].numpy())
     
-    return agent_bid.numpy()
+    return agent_bid
 
 # === Meta-Game Construction ===
 def build_meta_game(env: BidTradingEnv, policy_sets):
@@ -291,4 +325,4 @@ def test_env():
         print("\n\n\n")
 if __name__ == "__main__":
     run_training(debug = True)
-    # test_env()
+    #test_env()
