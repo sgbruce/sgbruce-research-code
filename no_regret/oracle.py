@@ -21,9 +21,10 @@ from tensorflow import keras
 from gekko import GEKKO
 from datetime import datetime
 
-BETA = 1
-OVERSOLD_PENALTY = 10
+BETA = 10
+OVERSOLD_PENALTY = 10000
 EXCESS_BID_PENALTY = 0.1
+MSE_SCALE = 1
 
 class SimpleOracle:
     def __init__(self, game: DubeyGame): # BUILD A NN THAT, GIVEN ENDOWMENTS AND UTILTIES, FINDS OPTIMAL BIDS
@@ -47,17 +48,20 @@ class NNOracle:
         normalizer = keras.layers.Normalization(axis=-1)
         input_layer = keras.layers.Input(shape=(self.num_inputs,))
         x = normalizer(input_layer)
-        x = keras.layers.Dense(128, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
-        x = keras.layers.Dense(128, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
-        x = keras.layers.Dense(128, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
-        x = keras.layers.Dense(64, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
-        output_layer = keras.layers.Dense(self.num_outputs, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(256, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(512, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(1024, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(2048, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(1024, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(512, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        x = keras.layers.Dense(256, activation=keras.layers.LeakyReLU(alpha=0.1))(x)
+        output_layer = keras.layers.Dense(self.num_outputs, activation=keras.layers.ReLU())(x)
         combined_output = keras.layers.Concatenate()([input_layer, output_layer])
         self.nn = keras.Model(inputs=input_layer, outputs=combined_output)
     
     def get_training_data(self):
         print("reading training data")
-        training_data_file = f"training_data_{len(self.game.players)}_{self.game.num_goods}.json"
+        training_data_file = f"training_data_{len(self.game.players)}_{self.game.num_goods}_cobb.json"
         with open(training_data_file, 'r') as f:
             training_data = json.load(f)
         print("training data loaded")
@@ -89,23 +93,17 @@ class NNOracle:
 
                 # Create a mask where the sale quantity is greater than the endowment
                 sale_quantity = tf.slice(pred_bids, [0, 3, 0], [-1, 1, -1])  # Sale quantity for each player and good
-                endowments = tf.reshape(endowments, (num_players, 1, num_goods))
-                mask = sale_quantity > endowments  # Boolean mask
-                oversold_amounts = tf.where(mask, sale_quantity - endowments, tf.zeros_like(sale_quantity))
-                true_mask = np.full((num_players, 1, num_goods), False, dtype=bool)
-                mask = tf.concat([true_mask, true_mask, mask, mask], axis=1)
-                zeroed_bids = tf.where(mask, tf.zeros_like(pred_bids), pred_bids)
-                pred_bids = zeroed_bids
-
-                total_oversold_amount = tf.reduce_sum(oversold_amounts)
+                endowments_reshaped = tf.reshape(endowments, (num_players, 1, num_goods))
+                penalty = tf.nn.relu(sale_quantity - endowments_reshaped)
+                total_oversold_amount = tf.reduce_sum(penalty)
 
                 
                 # Compute trade amounts using TensorFlow operations
                 true_trade_amounts = self.game.compute_trade_amounts(true_bids)
                 pred_trade_amounts = self.game.compute_trade_amounts(pred_bids)
-                if debug:
-                    print("true_trade_amounts: ", true_trade_amounts)
-                    print("pred_trade_amounts: ", pred_trade_amounts)
+                # if debug:
+                #     print("true_trade_amounts: ", true_trade_amounts)
+                #     print("pred_trade_amounts: ", pred_trade_amounts)
 
                 def compute_utility(trade_amounts):
                     bought_prices = trade_amounts[:, 0]
@@ -114,14 +112,14 @@ class NNOracle:
                     sold_quantities = trade_amounts[:, 3]
                     endowed_cash = tf.constant([player.money for player in self.game.players], dtype=tf.float32)
                     player_cash = tf.reduce_sum(sold_prices * sold_quantities - bought_prices * bought_quantities, axis=1) + endowed_cash
-                    cash_mask = tf.where(player_cash > 0, tf.zeros_like(player_cash), player_cash)
+                    cash_penalty = tf.nn.softplus(-player_cash)
                     player_utilities = tf.reduce_sum(preferences * bought_quantities, axis=1)
-                    utility = tf.reduce_sum(player_utilities - BETA * cash_mask)
-                    if debug:
-                        print("\n bought_quantities: ", bought_quantities)
-                        print("player_utilities: ", player_utilities)
-                        print("cash_mask: ", cash_mask)
-                        print("utility: ", utility)
+                    utility = tf.reduce_sum(player_utilities - BETA * cash_penalty)
+                    # if debug:
+                    #     print("\n bought_quantities: ", bought_quantities)
+                    #     print("player_utilities: ", player_utilities)
+                    #     print("cash_penalty: ", cash_penalty)
+                    #     print("utility: ", utility)
                     return utility
                 
                 def compute_excess_bid(bids, trade_amounts):
@@ -137,14 +135,68 @@ class NNOracle:
                 pred_utility = compute_utility(pred_trade_amounts)
 
                 excess_bid = compute_excess_bid(pred_bids, pred_trade_amounts)
+
+                mse_fallback = tf.reduce_mean(tf.square(true - pred))
                 
-                return true_utility - pred_utility + OVERSOLD_PENALTY * total_oversold_amount #+ EXCESS_BID_PENALTY * excess_bid
+                return true_utility - pred_utility + OVERSOLD_PENALTY * total_oversold_amount + MSE_SCALE * mse_fallback #+ EXCESS_BID_PENALTY * excess_bid
 
             # Use tf.map_fn with TensorFlow operations
             per_sample_losses = tf.map_fn(lambda x: per_sample_loss(x[0], x[1]), (y_true, y_pred), fn_output_signature=tf.float32)
             mean_loss = tf.reduce_mean(per_sample_losses)
             return mean_loss
         return custom_loss
+    
+    def get_custom_loss_vectorized(self, debug = False):
+        num_players = len(self.game.players)
+        num_goods = self.game.num_goods
+        def custom_loss_vectorized(y_true, y_pred):
+            # Split context and bids
+            true_context = tf.reshape(y_true[:, :self.num_inputs], (-1, 2, num_players, num_goods))
+            pred_context = tf.reshape(y_pred[:, :self.num_inputs], (-1, 2, num_players, num_goods))
+
+            endowments = true_context[:, 0]
+            preferences = true_context[:, 1]
+
+            true_bids = tf.reshape(y_true[:, self.num_inputs:], (-1, num_players, 4, num_goods))
+            pred_bids = tf.reshape(y_pred[:, self.num_inputs:], (-1, num_players, 4, num_goods))
+
+            # OVERSOLD PENALTY
+            sale_quantity = pred_bids[:, :, 3]  # shape (batch, num_players, num_goods)
+            oversold_amount = tf.nn.relu(sale_quantity - endowments)
+            total_oversold = tf.reduce_sum(oversold_amount, axis=[1, 2])  # shape (batch,)
+
+            # TRADE AMOUNTS (batch compute)
+            true_trade_amounts = self.game.compute_trade_amounts_vectorized(true_bids)  # should be batched
+            pred_trade_amounts = self.game.compute_trade_amounts_vectorized(pred_bids)  # should be batched
+
+            def compute_utility(trade_amounts):
+                bought_prices = trade_amounts[:, :, 0]
+                bought_quantities = trade_amounts[:, :, 1]
+                sold_prices = trade_amounts[:, :, 2]
+                sold_quantities = trade_amounts[:, :, 3]
+                endowed_cash = tf.constant([player.money for player in self.game.players], dtype=tf.float32)
+                endowed_cash = tf.reshape(endowed_cash, (1, -1))  # shape (1, num_players)
+                cash = tf.reduce_sum(sold_prices * sold_quantities - bought_prices * bought_quantities, axis=2) + endowed_cash
+                cash_penalty = -tf.nn.softplus(-cash)
+                player_utils = tf.reduce_sum(preferences * bought_quantities, axis=2)
+                return tf.reduce_sum(player_utils - BETA * cash_penalty, axis=1)  # shape (batch,)
+
+            assert_not_nan = tf.debugging.assert_all_finite(pred_trade_amounts, "pred_trade_amounts contains NaNs or Infs")
+            with tf.control_dependencies([assert_not_nan]):
+                true_util = compute_utility(true_trade_amounts)
+                pred_util = compute_utility(pred_trade_amounts)
+
+            # EXCESS BID (if needed)
+            # excess_bid = tf.reduce_sum(pred_bids - pred_trade_amounts, axis=[1,2,3])
+
+            # fallback mse
+            mse_loss = tf.reduce_mean(tf.square(y_true - y_pred), axis=1)
+
+            total_loss = (true_util - pred_util) + OVERSOLD_PENALTY * total_oversold + MSE_SCALE * mse_loss
+            return tf.reduce_mean(total_loss)
+        return custom_loss_vectorized
+
+            
     
     # Convert to Strategy objects if needed, or use TensorFlow operations
                 # true_bids = [Tensor_Strategy(true_bids[i][0], true_bids[i][1], true_bids[i][2], true_bids[i][3]) for i in range(num_players)]
@@ -154,8 +206,8 @@ class NNOracle:
         # get the training context and optimal market value
         training_data_x, training_data_y = self.get_training_data()
         if reduced:
-            training_data_x = training_data_x[0:len(training_data_x) // 10]
-            training_data_y = training_data_y[0:len(training_data_y) // 10]
+            training_data_x = training_data_x[0:len(training_data_x) // 5]
+            training_data_y = training_data_y[0:len(training_data_y) // 5]
         # Split the training data into train and validation splits 80/20
         split_index = int(0.8 * len(training_data_x))
         train_x, val_x = training_data_x[:split_index], training_data_x[split_index:]
@@ -164,16 +216,16 @@ class NNOracle:
         print(train_x.shape)
         print(train_y.shape)
 
-        self.nn.compile(optimizer='adam', loss=self.get_custom_loss())
-        epochs = 5 if reduced else 50
-        self.nn.fit(train_x, train_y, epochs=epochs, batch_size=10, validation_data=(val_x, val_y))
+        self.nn.compile(loss=self.get_custom_loss())
+        epochs = 5 if reduced else 20
+        self.nn.fit(train_x, train_y, epochs=epochs, batch_size=16, validation_data=(val_x, val_y))
 
     def train_nn_no_custom_loss(self, reduced = False):
         # get the training context and optimal market value
         training_data_x, training_data_y = self.get_training_data()
         if reduced:
-            training_data_x = training_data_x[0:len(training_data_x) // 10]
-            training_data_y = training_data_y[0:len(training_data_y) // 10]
+            training_data_x = training_data_x[0:len(training_data_x) // 1]
+            training_data_y = training_data_y[0:len(training_data_y) // 1]
         # Split the training data into train and validation splits 80/20
         # split_index = int(0.8 * len(training_data_x))
         # train_x, val_x = training_data_x[:split_index], training_data_x[split_index:]
@@ -183,8 +235,8 @@ class NNOracle:
         print(training_data_y.shape)
 
         self.nn.compile(optimizer='adam', loss='mse')
-        epochs = 5 if reduced else 50
-        self.nn.fit(training_data_x, training_data_y, epochs=epochs, batch_size=32, validation_split=0.2)
+        epochs = 2 if reduced else 50
+        self.nn.fit(training_data_x, training_data_y, epochs=epochs, batch_size=1, validation_split=0.2)
 
     '''
     context is a list of the players' strategies and endowments
@@ -212,14 +264,14 @@ if __name__ == "__main__":
     print("starting")
     np.random.seed(42)
     game = DubeyGame(num_goods=2)
-    game.add_player(DubeyPlayer(0, [1, 1]))
-    game.add_player(DubeyPlayer(0, [1, 1]))
+    game.add_player(DubeyPlayer(0, [10, 10]))
+    game.add_player(DubeyPlayer(0, [10, 10]))
     nn_oracle = NNOracle(game)
     print("game created")
-    nn_oracle.train_nn_no_custom_loss(reduced = False)
+    nn_oracle.train_nn_no_custom_loss(reduced = True)
     print("nn trained")
     # nn_oracle.export_nn()
-    utilities = np.array([[1, 0], [0, 1]])
+    utilities = np.array([[0.3, 0.7], [0.7, 0.3]])
     context, bids = nn_oracle.predict_optimal_strategies(utilities)
     strategies = [Strategy(bid[0], bid[1], bid[2], bid[3]) for bid in bids]
     print("context: ", context)

@@ -3,7 +3,7 @@ from dubey_regret import DubeyGame, DubeyPlayer, Strategy
 import numpy as np
 from gekko import GEKKO
 
-def get_competitive_solution(endowments, preferences, debug=False):
+def get_competitive_solution_linear(endowments, preferences, debug=False):
     m = GEKKO(remote=False)
 
     num_players = len(endowments)
@@ -14,10 +14,10 @@ def get_competitive_solution(endowments, preferences, debug=False):
     p = [[m.Param(preferences[i][j]) for j in range(num_goods)] for i in range(num_players)]
 
     # Create variables for each player's allocation
-    x = [[m.Var(value=0.5, lb=0) for _ in range(num_goods)] for _ in range(num_players)]
+    x = [[m.Var(value=0.5, lb=0, integer=True) for _ in range(num_goods)] for _ in range(num_players)]
 
     # Create variables for prices
-    prices = [m.Var(value=1, lb=0.01) for _ in range(num_goods)]  # Set lb>0 to avoid trivial zero prices
+    prices = [m.Var(value=1, lb=0.001) for _ in range(num_goods)]  # Set lb>0 to avoid trivial zero prices
     m.Equation(prices[0] == 1) # remove degree of freedom
 
     # Budget constraints: each player's spending ≤ initial endowment value
@@ -29,14 +29,23 @@ def get_competitive_solution(endowments, preferences, debug=False):
     for j in range(num_goods):
         m.Equation(sum(x[i][j] for i in range(num_players)) == sum(e[i][j] for i in range(num_players)))
 
-    # Objective function: Maximize total weighted utility
+    # Objective function: Maximize total weighted utility, using Cobb-Douglas utility function
     utility = sum(sum(x[i][j] * p[i][j] for j in range(num_goods)) for i in range(num_players))
     m.Obj(-utility)  # Minimize the negative to maximize
 
     # Solve the model
-    m.solve(disp=debug)
+    m.solve(disp=False)
 
     return [[xi.value for xi in x_row] for x_row in x], [p.value for p in prices]
+
+def get_competitive_solution_cobb(endowments, preferences, debug=False):
+    p_1 = 1
+    p_2 = (preferences[0][1] * endowments[0][0] + preferences[1][1] * endowments[1][0]) / (preferences[0][0] * endowments[0][1] + preferences[1][0] * endowments[1][1])
+    x_1_1 = preferences[0][0] * (endowments[0][0] + p_2 * endowments[0][1])
+    x_1_2 = preferences[0][1] * (endowments[0][0] + p_2 * endowments[0][1]) / p_2
+    x_2_1 = preferences[1][0] * (endowments[1][0] + p_2 * endowments[1][1])
+    x_2_2 = preferences[1][1] * (endowments[1][0] + p_2 * endowments[1][1]) / p_2
+    return [[x_1_1, x_1_2], [x_2_1, x_2_2]], [p_1, p_2]
 
 def get_optimal_bids(endowments, x, prices, debug=False):
     s = [Strategy(prices, np.maximum(0, x[i] - endowments[i]), prices, np.maximum(0, endowments[i] - x[i])) for i in range(len(x))]
@@ -47,11 +56,12 @@ def get_optimal_bids(endowments, x, prices, debug=False):
 def get_training_data(game, debug=False):
         # generate random endowments and preferences
         endowments = np.random.randint(0, 100, size=(len(game.players), game.num_goods))
-        preferences = np.random.randint(0, 20, size=(len(game.players), game.num_goods))
+        p = np.random.rand(len(game.players))
+        preferences = np.array([[a.round(2), 1-a.round(2)] for a in p])
         context = np.concatenate([endowments, preferences], axis=0)
-        x, prices = get_competitive_solution(endowments, preferences)
-        x = np.moveaxis(np.array(x), 2, 0)[0]
-        prices = np.moveaxis(np.array(prices), 1, 0)[0]
+        x, prices = get_competitive_solution_cobb(endowments, preferences)
+        # x = np.moveaxis(np.array(x), 2, 0)[0]
+        # prices = np.moveaxis(np.array(prices), 1, 0)[0]
         if debug:
             print(x)
             print(prices)
@@ -65,15 +75,15 @@ def gen_training_data():
     game.add_player(DubeyPlayer(0, [1, 1]))
     game.add_player(DubeyPlayer(0, [1, 1]))
     iter = 0
-    max_iter = 100000
-    with open('training_data_2_2.json', 'w') as f:
+    max_iter = 10000
+    with open('training_data_2_2_cobb.json', 'w') as f:
         f.write('[\n')
     while True:
         try:
             context, optimal_strategies = get_training_data(game)
             datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
             # print(datapoint)
-            with open('training_data_2_2.json', 'a') as f:
+            with open('training_data_2_2_cobb.json', 'a') as f:
                 json.dump(datapoint, f)
                 if iter < max_iter:
                     f.write(',\n')
@@ -84,7 +94,7 @@ def gen_training_data():
             print(iter)
         if iter >= max_iter:
             break
-    with open('training_data_2_2.json', 'a') as f:
+    with open('training_data_2_2_cobb.json', 'a') as f:
         f.write(']')
     
     # game.add_player(DubeyPlayer(0, [1, 1]))
@@ -203,4 +213,5 @@ def gen_training_data():
     #         break
 
 if __name__ == "__main__":
-    gen_training_data()
+    print(get_competitive_solution_cobb([[4,4],[4,4]], [[0.75, 0.25], [0.25, 0.75]]))
+    # gen_training_data()

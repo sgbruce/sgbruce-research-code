@@ -74,7 +74,7 @@ def test_loss_fn(oracle, debug = False):
 
 
 def predict_test(oracle):
-    nn_oracle.train_nn(reduced = True)
+    nn_oracle.train_nn(reduced = False)
     # nn_oracle.export_nn()
     utilities = np.array([[1, 0], [0, 1]])
     context, bids = oracle.predict_optimal_strategies(utilities)

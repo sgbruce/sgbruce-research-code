@@ -207,76 +207,282 @@ class DubeyGame:
     
     @tf.function
     def compute_trade_amounts(self, bids):
-        num_players, _, num_goods = bids.shape
+        """
+        Computes the net buy/sell quantities and average prices for each player and good.
+
+        Args:
+            bids: A tensor of shape (num_players, 4, num_goods), where:
+                - bids[:, 0, g] = buy price for good g
+                - bids[:, 1, g] = buy quantity for good g
+                - bids[:, 2, g] = sell price for good g
+                - bids[:, 3, g] = sell quantity for good g
+
+        Returns:
+            output_bids: A tensor of shape (num_players, 4, num_goods) with:
+                - output[:, 0, g] = average buy price for good g
+                - output[:, 1, g] = total bought quantity
+                - output[:, 2, g] = average sell price
+                - output[:, 3, g] = total sold quantity
+        """
+        num_players = tf.shape(bids)[0]
+        num_goods = tf.shape(bids)[2]
         output_bids = tf.zeros((num_players, 4, num_goods), dtype=tf.float32)
+        eps = tf.constant(1e-8, dtype=tf.float32)
 
-        def execute_trade(index, good, quantity, price, buy):
-            if buy:
-                new_quantity = output_bids[index, 1, good] + quantity
-                new_price = (output_bids[index, 0, good] * output_bids[index, 1, good] + price * quantity) / new_quantity
-                new_bids = tf.tensor_scatter_nd_update(output_bids, [[index, 1, good]], [new_quantity])
-                new_bids = tf.tensor_scatter_nd_update(new_bids, [[index, 0, good]], [new_price])
-            else:
-                new_quantity = output_bids[index, 3, good] + quantity
-                new_price = (output_bids[index, 2, good] * output_bids[index, 3, good] + price * quantity) / new_quantity
-                new_bids = tf.tensor_scatter_nd_update(output_bids, [[index, 3, good]], [new_quantity])
-                new_bids = tf.tensor_scatter_nd_update(new_bids, [[index, 2, good]], [new_price])
-            return new_bids
+        def weighted_avg_price(old_price, old_qty, new_price, new_qty):
+            total_qty = old_qty + new_qty
+            safe_qty = tf.maximum(total_qty, eps)
+            return (old_price * old_qty + new_price * new_qty) / safe_qty
 
-        for good in range(num_goods):
-            # Separate buy and sell bids for the current good, index 1 is buy quantity, index 3 is sell quantity
-            buy_mask = bids[:, 1, good] > 0
-            sell_mask = bids[:, 3, good] > 0
-            buy_bids = tf.boolean_mask(bids, buy_mask)
-            sell_bids = tf.boolean_mask(bids, sell_mask)
+        def execute_trade(output, index, good, qty, price, is_buy):
+            price_idx = 0 if is_buy else 2
+            qty_idx = 1 if is_buy else 3
 
-            if buy_bids.shape[0] == 0 or sell_bids.shape[0] == 0:
-                continue
+            old_qty = output[index, qty_idx, good]
+            old_price = output[index, price_idx, good]
 
+            new_qty = old_qty + qty
+            avg_price = weighted_avg_price(old_price, old_qty, price, qty)
+
+            output = tf.tensor_scatter_nd_update(output, [[index, qty_idx, good]], [new_qty])
+            output = tf.tensor_scatter_nd_update(output, [[index, price_idx, good]], [avg_price])
+            return output
+
+        for good in tf.range(num_goods):
             buy_prices = bids[:, 0, good]
             sell_prices = bids[:, 2, good]
 
-            buy_ordering = tf.argsort(buy_prices, direction='DESCENDING')
-            sell_ordering = tf.argsort(sell_prices)
-            # Initialize indices for buyers and sellers
-            buy_index = 0
-            sell_index = 0
-            buyer_index = buy_ordering[buy_index]
-            seller_index = sell_ordering[sell_index]
-            buy_price = bids[buyer_index][0][good]
-            buy_quantity = bids[buyer_index][1][good]
-            sell_price = bids[seller_index][2][good]
-            sell_quantity = bids[seller_index][3][good]
+            buy_order = tf.argsort(buy_prices, direction="DESCENDING")
+            sell_order = tf.argsort(sell_prices)
 
-            # Process bids
-            while buy_index < buy_ordering.shape[0] and sell_index < sell_ordering.shape[0] and buy_price >= sell_price:
-                # Determine the transaction quantity between the buyer and seller
-                transaction_quantity = tf.minimum(buy_quantity, sell_quantity)
-                if transaction_quantity > 0:
-                    buy_quantity -= transaction_quantity
-                    sell_quantity -= transaction_quantity
+            buy_index = tf.constant(0)
+            sell_index = tf.constant(0)
 
-                    # Update quantities
-                    output_bids = execute_trade(buyer_index, good, transaction_quantity, buy_price, True)
-                    output_bids = execute_trade(seller_index, good, transaction_quantity, buy_price, False)
+            buyer_idx = buy_order[buy_index]
+            seller_idx = sell_order[sell_index]
 
-                # Move to the next buyer or seller if their quantity is exhausted
-                if buy_quantity == 0:
-                    buy_index += 1
-                    if buy_index < buy_ordering.shape[0]:
-                        buyer_index = buy_ordering[buy_index]
-                        buy_price = bids[buyer_index][0][good]
-                        buy_quantity = bids[buyer_index][1][good]
-                if sell_quantity == 0:
-                    sell_index += 1
-                    if sell_index < sell_ordering.shape[0]:
-                        seller_index = sell_ordering[sell_index]
-                        sell_price = bids[seller_index][2][good]
-                        sell_quantity = bids[seller_index][3][good]
+            buy_price = tf.gather(bids[:, 0, good], buyer_idx)
+            buy_qty = tf.gather(bids[:, 1, good], buyer_idx)
+            sell_price = tf.gather(bids[:, 2, good], seller_idx)
+            sell_qty = tf.gather(bids[:, 3, good], seller_idx)
 
-                # Implement proportional rationing if needed
-                # (This part can be expanded based on specific rules for rationing)
+            def loop_cond(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
+                return tf.logical_and(
+                    tf.logical_and(bi < num_players, si < num_players),
+                    bp >= sp
+                )
+
+            def loop_body(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
+                trade_qty = tf.minimum(bq, sq)
+                should_trade = trade_qty > 0
+
+                def trade():
+                    out = execute_trade(output, b_idx, good, trade_qty, bp, True)
+                    out = execute_trade(out, s_idx, good, trade_qty, bp, False)
+                    return out
+
+                output = tf.cond(should_trade, trade, lambda: output)
+
+                bq = tf.cond(should_trade, lambda: bq - trade_qty, lambda: bq)
+                sq = tf.cond(should_trade, lambda: sq - trade_qty, lambda: sq)
+
+                next_bi = bi + 1
+                has_next_buyer = next_bi < num_players
+                next_buyer_idx = tf.cond(has_next_buyer, lambda: buy_order[next_bi], lambda: b_idx)
+                advance_buyer = tf.logical_and(tf.equal(bq, 0), has_next_buyer)
+
+                bi = tf.cond(tf.equal(bq, 0), lambda: next_bi, lambda: bi)
+                b_idx = tf.cond(advance_buyer, lambda: next_buyer_idx, lambda: b_idx)
+                bp = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 0, good], next_buyer_idx), lambda: bp)
+                bq = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 1, good], next_buyer_idx), lambda: bq)
+
+                next_si = si + 1
+                has_next_seller = next_si < num_players
+                next_seller_idx = tf.cond(has_next_seller, lambda: sell_order[next_si], lambda: s_idx)
+                advance_seller = tf.logical_and(tf.equal(sq, 0), has_next_seller)
+
+                si = tf.cond(tf.equal(sq, 0), lambda: next_si, lambda: si)
+                s_idx = tf.cond(advance_seller, lambda: next_seller_idx, lambda: s_idx)
+                sp = tf.cond(advance_seller, lambda: tf.gather(bids[:, 2, good], next_seller_idx), lambda: sp)
+                sq = tf.cond(advance_seller, lambda: tf.gather(bids[:, 3, good], next_seller_idx), lambda: sq)
+
+                return output, bi, si, b_idx, s_idx, bp, bq, sp, sq
+
+            loop_vars = [output_bids, buy_index, sell_index, buyer_idx, seller_idx, buy_price, buy_qty, sell_price, sell_qty]
+            output_bids, *_ = tf.while_loop(loop_cond, loop_body, loop_vars, maximum_iterations=num_players * 2 + 1)
+
         return output_bids
+    
+    @tf.function
+    def compute_trade_amounts_vectorized(self, bids: tf.Tensor) -> tf.Tensor:
+        """
+        Vectorized batched implementation of trade amount computation.
+        
+        Args:
+            bids: Tensor of shape (batch_size, num_players, 4, num_goods)
+                with channels: [buy_price, buy_quantity, sell_price, sell_quantity]
+        
+        Returns:
+            Tensor of shape (batch_size, num_players, 4, num_goods) with:
+            [avg_buy_price, total_buy_quantity, avg_sell_price, total_sell_quantity]
+        """
+        batch_size = tf.shape(bids)[0]
+        num_players = tf.shape(bids)[1]
+        num_goods = tf.shape(bids)[3]
+
+        # Unpack bid components
+        buy_price = bids[:, :, 0, :]  # shape (B, P, G)
+        buy_qty = bids[:, :, 1, :]
+        sell_price = bids[:, :, 2, :]
+        sell_qty = bids[:, :, 3, :]
+
+        # Prepare sorting indices
+        buy_sort_indices = tf.argsort(buy_price, axis=1, direction='DESCENDING')
+        sell_sort_indices = tf.argsort(sell_price, axis=1)
+
+        # Compute inverse indices to restore original player order
+        buy_inverse_indices = tf.argsort(buy_sort_indices, axis=1)
+        sell_inverse_indices = tf.argsort(sell_sort_indices, axis=1)
+
+        # Sort prices and quantities accordingly (batch gather)
+        def batch_gather(tensor, indices):
+            batch_range = tf.range(tf.shape(tensor)[0])[:, tf.newaxis, tf.newaxis]  # shape (B, 1, 1)
+            good_range = tf.range(tf.shape(tensor)[2])[tf.newaxis, tf.newaxis, :]   # shape (1, 1, G)
+            batch_indices = tf.tile(batch_range, [1, tf.shape(tensor)[1], tf.shape(tensor)[2]])
+            good_indices = tf.tile(good_range, [tf.shape(tensor)[0], tf.shape(tensor)[1], 1])
+            gather_indices = tf.stack([batch_indices, indices, good_indices], axis=-1)
+            return tf.gather_nd(tensor, gather_indices)
+
+        # of shape (B, P, G), where [0,0,0] is the highest buy price for good 0, batch 0, [0,1,0] is the second highest buy price for good 0, batch 0, [0,0,1] is the highest buy price for good 1, batch 0, etc.
+        # same for all prices and quantities
+        sorted_buy_price = batch_gather(buy_price, buy_sort_indices)
+        sorted_buy_qty = batch_gather(buy_qty, buy_sort_indices)
+        sorted_sell_price = batch_gather(sell_price, sell_sort_indices)
+        sorted_sell_qty = batch_gather(sell_qty, sell_sort_indices)
+        # Initialize output tensor
+        output = tf.zeros_like(bids)
+
+        def compute_for_good(good_idx):
+            # shape: (B, P), where [0,0] is the highest buy price for batch 0, [0,1] is the second highest buy price for batch 0, [1,0] is the highest buy price for batch 1, etc.
+            # same for all prices quantities
+            bp = sorted_buy_price[:, :, good_idx]
+            bq = sorted_buy_qty[:, :, good_idx]
+            sp = sorted_sell_price[:, :, good_idx]
+            sq = sorted_sell_qty[:, :, good_idx]
+
+            # Match buyers and sellers greedily
+            buyer_ptr = tf.zeros([batch_size], dtype=tf.int32)
+            seller_ptr = tf.zeros([batch_size], dtype=tf.int32)
+
+            # Buffers for accumulating results
+            buy_sum_price = tf.zeros([batch_size, num_players])
+            buy_sum_qty = tf.zeros([batch_size, num_players])
+            sell_sum_price = tf.zeros([batch_size, num_players])
+            sell_sum_qty = tf.zeros([batch_size, num_players])
+
+            mask = tf.ones((batch_size,), dtype=tf.bool)
+
+            cond = lambda bp, bq, sp, sq, buyer_ptr, seller_ptr, buy_sum_price, buy_sum_qty, sell_sum_price, sell_sum_qty, mask: tf.reduce_any(mask)
+
+            def body(bp, bq, sp, sq, buyer_ptr, seller_ptr,
+                        buy_sum_price, buy_sum_qty, sell_sum_price, sell_sum_qty, mask):
+
+                # 1D of length B (batch_size), where each element is the sorted index of the player that is buying/selling for that batch index, NOT PLAYER INDEX, ALWAYS STARTING FROM 0
+                b_idx = buyer_ptr
+                b_idx = tf.where(mask, b_idx, tf.zeros((batch_size), dtype=tf.int32))
+                s_idx = seller_ptr
+                s_idx = tf.where(mask, s_idx, tf.zeros((batch_size), dtype=tf.int32))
+
+                # Gather current bids, of shape B, where each element is the value of the buy/sell price/quantity for the player active at that bid index
+                b_price = tf.where(mask, tf.gather(bp, b_idx, axis=1, batch_dims=1), tf.zeros((batch_size)))
+                b_quantity = tf.where(mask, tf.gather(bq, b_idx, axis=1, batch_dims=1), tf.zeros((batch_size)))
+                s_price = tf.where(mask, tf.gather(sp, s_idx, axis=1, batch_dims=1), tf.zeros((batch_size)))
+                s_quantity = tf.where(mask, tf.gather(sq, s_idx, axis=1, batch_dims=1), tf.zeros((batch_size)))
+
+                # Check trade condition
+                should_trade = b_price >= s_price
+                trade_qty = tf.where(should_trade, tf.minimum(b_quantity, s_quantity), tf.zeros_like(b_quantity))
+
+                # Masks keep track of the active buyer/seller to subtract the trade quantity from
+                buyer_mask = tf.where(mask[:, tf.newaxis], tf.one_hot(b_idx, num_players, dtype=tf.int32), tf.zeros((batch_size, num_players), dtype=tf.int32))
+                seller_mask = tf.where(mask[:, tf.newaxis], tf.one_hot(s_idx, num_players, dtype=tf.int32), tf.zeros((batch_size, num_players), dtype=tf.int32))
+
+                # Update the buy price/quantity for each batch index for the active player
+                buy_sum_price += trade_qty[:, tf.newaxis] * b_price[:, tf.newaxis] * tf.cast(buyer_mask, dtype=tf.float32)
+                buy_sum_qty += trade_qty[:, tf.newaxis] * tf.cast(buyer_mask, dtype=tf.float32)
+
+                # Update the sell price/quantity for each batch index for the active player
+                sell_sum_price += trade_qty[:, tf.newaxis] * b_price[:, tf.newaxis] * tf.cast(seller_mask, dtype=tf.float32)
+                sell_sum_qty += trade_qty[:, tf.newaxis] * tf.cast(seller_mask, dtype=tf.float32)
+
+                # Update remaining buy/sell quantities for each batch index for the active player
+                b_indices = tf.expand_dims(tf.where(mask, b_idx, tf.zeros((batch_size), dtype=tf.int32)), axis=-1)
+                b_indices = tf.concat([tf.range(tf.shape(b_indices)[0], dtype=tf.int32)[:, tf.newaxis], b_indices], axis=-1)
+                bq = tf.tensor_scatter_nd_sub(bq, b_indices, trade_qty)
+                
+                s_indices = tf.expand_dims(tf.where(mask, s_idx, tf.zeros((batch_size), dtype=tf.int32)), axis=-1)
+                s_indices = tf.concat([tf.range(tf.shape(s_indices)[0], dtype=tf.int32)[:, tf.newaxis], s_indices], axis=-1)
+                sq = tf.tensor_scatter_nd_sub(sq, s_indices, trade_qty)
+                
+                # Update the buyer/seller player index to the next active player where no quantity is left
+                buyer_ptr += tf.where(mask, tf.cast(tf.gather(bq, b_idx, axis=1, batch_dims=1) == 0, tf.int32), tf.zeros((batch_size), dtype=tf.int32))
+                seller_ptr += tf.where(mask, tf.cast(tf.gather(sq, s_idx, axis=1, batch_dims=1) == 0, tf.int32), tf.zeros((batch_size), dtype=tf.int32))
+
+                still_active = tf.logical_and(tf.logical_and(buyer_ptr < num_players, seller_ptr < num_players), should_trade)
+                mask = tf.logical_and(mask, still_active)
+
+                return bp, bq, sp, sq, buyer_ptr, seller_ptr, buy_sum_price, buy_sum_qty, sell_sum_price, sell_sum_qty, mask
+
+            max_loops = num_players * 2 + 1 # buyer or seller has to change on each loop, so must finish in this many loops
+            bp_fin, _, sp_fin, _, _, _, bp_sum, bq_sum, sp_sum, sq_sum, mask = tf.while_loop(
+                cond, body,
+                [bp, bq, sp, sq, buyer_ptr, seller_ptr, buy_sum_price, buy_sum_qty, sell_sum_price, sell_sum_qty, mask],
+                shape_invariants=[
+                    tf.TensorShape([None, None]),  # bp
+                    tf.TensorShape([None, None]),  # bq
+                    tf.TensorShape([None, None]),  # sp
+                    tf.TensorShape([None, None]),  # sq
+                    tf.TensorShape([None]),        # buyer_ptr
+                    tf.TensorShape([None]),        # seller_ptr
+                    tf.TensorShape([None, None]),  # buy_sum_price
+                    tf.TensorShape([None, None]),  # buy_sum_qty
+                    tf.TensorShape([None, None]),  # sell_sum_price
+                    tf.TensorShape([None, None]),  # sell_sum_qty
+                    tf.TensorShape([None]),        # mask
+                ],
+                maximum_iterations=max_loops
+            )
+
+            # Avoid div by zero
+            avg_buy_price = tf.where(bq_sum > 0, bp_sum / bq_sum, bp_fin)
+            avg_sell_price = tf.where(sq_sum > 0, sp_sum / sq_sum, sp_fin)
+
+            # Restore original player order
+            buy_inv_idx = buy_inverse_indices[:, :, good_idx]
+            sell_inv_idx = sell_inverse_indices[:, :, good_idx]
+
+            avg_buy_price_reordered = tf.gather(avg_buy_price, buy_inv_idx, axis=1, batch_dims=1)
+            bq_sum_reordered = tf.gather(bq_sum, buy_inv_idx, axis=1, batch_dims=1)
+
+            avg_sell_price_reordered = tf.gather(avg_sell_price, sell_inv_idx, axis=1, batch_dims=1)
+            sq_sum_reordered = tf.gather(sq_sum, sell_inv_idx, axis=1, batch_dims=1)
+
+            # Stack into (B, P, 4) with restored order
+            result = tf.stack([
+                avg_buy_price_reordered,
+                bq_sum_reordered,
+                avg_sell_price_reordered,
+                sq_sum_reordered
+            ], axis=2)
+            # print("result for good ", good_idx, ": ", result)
+
+            return result
+
+        results_per_good = tf.map_fn(compute_for_good, tf.range(num_goods), fn_output_signature=tf.TensorSpec((None, None, 4), tf.float32))
+        # shape now is (G, B, P, 4), so we need to transpose
+        result = tf.transpose(results_per_good, perm=[1, 2, 3, 0])  # (B, P, 4, G)
+        return result
+
     
     def compute_trade_amounts_bilateral(self, bid, other_bid):
         executed_trade = Strategy(bid.buy_price.copy(), bid.buy_quantity.copy(), bid.sell_price.copy(), bid.sell_quantity.copy())
