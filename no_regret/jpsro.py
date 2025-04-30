@@ -18,7 +18,7 @@ PARAM_DICT = {
     "solver": tf.keras.optimizers.Adam,
     "amsgrad": True,
     "learning_rate": 0.05,
-    "max_epochs": 20,
+    "max_epochs": 15,
     "best_response_epochs": 100,
     "best_response_samples": 200,
 }
@@ -88,7 +88,7 @@ class BidTradingEnv(dubey.DubeyGame):
     def compute_utilities(self, allocations, net_credit):
         # allocations is a tensor of shape (num_players, num_goods)
         # net_credit is a tensor of shape (num_players,)
-        utilities = tf.reduce_sum(allocations ** self.alphas, axis=1) + 0.5 * tf.minimum(0, net_credit)
+        utilities = tf.reduce_prod(allocations ** self.alphas, axis=1) + 0.5 * tf.minimum(0, net_credit)
         return utilities
     
     def compute_utilities_vectorized(self, allocations, net_credit):
@@ -389,18 +389,18 @@ if __name__ == "__main__":
     best_response_epochs = [10, 50, 100, 200, 500]
     best_response_samples = [10, 100, 200, 500, 1000]
 
-    log_prefix = f"jprso_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
+    log_prefix = f"jpsro_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
     os.makedirs(f"logs/{log_prefix}", exist_ok=True)
     os.makedirs(f"results/{log_prefix}", exist_ok=True)
 
     adam_seen = False
     for optimizer, optimizer_name in optimizers:
+        if optimizer_name == "Adam" and adam_seen:
+            PARAM_DICT["amsgrad"] = True
+        elif optimizer_name == "Adam":
+            PARAM_DICT["amsgrad"] = False
+            adam_seen = True
         for learning_rate in learning_rates:
-            if optimizer_name == "Adam" and adam_seen:
-                PARAM_DICT["amsgrad"] = True
-            else:
-                PARAM_DICT["amsgrad"] = False
-                adam_seen = True
             PARAM_DICT["solver"] = optimizer
             PARAM_DICT["solver_name"] = optimizer_name
             PARAM_DICT["learning_rate"] = learning_rate
