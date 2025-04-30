@@ -4,21 +4,29 @@ import tensorflow as tf
 import cvxpy as cp
 import itertools
 import time
+from datetime import datetime
+import dubey_regret as dubey
+
+# --- Configure NumPy string formatting ---
+# This prevents NumPy from truncating large arrays with '...'
+np.set_printoptions(threshold=np.inf, precision=4, suppress=True)
+
 # === Custom Trading Environment ===
-class BidTradingEnv:
+class BidTradingEnv(dubey.DubeyGame):
     def __init__(self, endowments, cobb_douglas_exponents):
+        super().__init__(2)
         self.num_goods = 2
         self.endowments = endowments  # list of shape (num_players, num_goods)
         self.num_players = len(endowments)
-        self.alphas = cobb_douglas_exponents  # list of shape (num_players, num_goods)
+        self.alphas = tf.convert_to_tensor(cobb_douglas_exponents, dtype=tf.float32)  # list of shape (num_players, num_goods)
         self.reset()
 
     def reset(self):
         return np.zeros((len(self.endowments), self.num_goods))  # placeholder obs
 
-    def step(self, bids: tf.Tensor):
+    def step(self, bids: tf.Tensor, debug = False):
         # bids = list of (buy_price, buy_qty, sell_price, sell_qty) * num_goods per agent
-        executed_bids = self.match_trades(bids)
+        executed_bids = self.compute_trade_amounts(bids)
         endowments = tf.cast(self.endowments, dtype=tf.float32)
         # build allocations as purchase amount + endowment - sell amount
         bought_prices = tf.squeeze(executed_bids[:, 0, :]) # Shape: (num_players, num_goods)
@@ -33,12 +41,283 @@ class BidTradingEnv:
         rewards = self.compute_utilities(allocations, net_credit)
 
         sell_quantities = tf.squeeze(bids[:, 3, :])
-        valid_bids = tf.reduce_all(tf.logical_and(tf.reduce_all(bids >= 0, axis=(1, 2)), tf.reduce_all(endowments - sell_quantities >= 0, axis=1)))
+        valid_bids = tf.logical_and(tf.reduce_all(bids >= 0, axis=(1, 2)), tf.reduce_all(endowments - sell_quantities >= 0, axis=1))
+        valid_bids = tf.cast(valid_bids, tf.bool)
+
+        return None, rewards, True, {"executed_bids": executed_bids, "allocations": allocations, "valid_bids": valid_bids, "net_credit": net_credit}
+    
+    def vector_step(self, bids, debug = False):
+        # bids = list of (buy_price, buy_qty, sell_price, sell_qty) * num_goods per agent
+        executed_bids = self.compute_trade_amounts_vectorized(bids)
+        if debug:
+            executed_bids = tf.debugging.check_numerics(executed_bids, "NaN/Inf in executed_bids") # Add check
+        
+        endowments = tf.cast(self.endowments, dtype=tf.float32)
+        # build allocations as purchase amount + endowment - sell amount
+        bought_prices = tf.squeeze(executed_bids[:, :, 0, :]) # Shape: (batch_size, num_players, num_goods)
+        bought_quantities = tf.squeeze(executed_bids[:, :, 1, :]) # Shape: (batch_size, num_players, num_goods)
+        sold_prices = tf.squeeze(executed_bids[:, :, 2, :]) # Shape: (batch_size, num_players, num_goods)
+        sold_quantities = tf.squeeze(executed_bids[:, :, 3, :])   # Shape: (batch_size, num_players, num_goods)
+
+        # Calculate allocations element-wise using TensorFlow
+        allocations = bought_quantities + endowments - sold_quantities # Shape: (batch_size, num_players, num_goods)
+        net_credit = tf.reduce_sum(sold_prices * sold_quantities - bought_prices * bought_quantities, axis=2) # Shape: (batch_size, num_players)
+
+        rewards = self.compute_utilities_vectorized(allocations, net_credit) # Shape: (batch_size, num_players)
+        if debug:
+            rewards = tf.debugging.check_numerics(rewards, "NaN/Inf in rewards") # Add check
+
+        sell_quantities = tf.squeeze(bids[:, :, 3, :])
+        valid_bids = tf.logical_and(tf.reduce_all(bids >= 0, axis=(2, 3)), tf.reduce_all(endowments - sell_quantities >= 0, axis=2))
         valid_bids = tf.cast(valid_bids, tf.bool)
 
         return None, rewards, True, {"executed_bids": executed_bids, "allocations": allocations, "valid_bids": valid_bids, "net_credit": net_credit}
 
-    @tf.function
+    def compute_utilities(self, allocations, net_credit):
+        # allocations is a tensor of shape (num_players, num_goods)
+        # net_credit is a tensor of shape (num_players,)
+        utilities = tf.reduce_sum(allocations ** self.alphas, axis=1) + 0.5 * tf.minimum(0, net_credit)
+        return utilities
+    
+    def compute_utilities_vectorized(self, allocations, net_credit):
+        # allocations is a tensor of shape (batch_size, num_players, num_goods)
+        # net_credit is a tensor of shape (batch_size, num_players)
+        epsilon = 1e-9 # Small epsilon to avoid log(0) or pow(<0, frac) issues
+        safe_allocations = tf.maximum(allocations, epsilon)
+        expanded_alphas = tf.expand_dims(self.alphas, axis=0)
+        tiled_alphas = tf.tile(expanded_alphas, multiples=[tf.shape(allocations)[0], 1, 1])
+        utilities = tf.reduce_sum(safe_allocations ** tiled_alphas, axis=2) + 0.5 * tf.minimum(0, net_credit)
+        return utilities
+
+    def evaluate_policy_tuple(self, policies):
+        _, rewards, _, _ = self.step(tf.convert_to_tensor(policies, dtype=tf.float32))
+        return rewards
+    
+    def create_basic_policy(self, player_idx):
+        base_strat = [np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2, np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2]
+        return tf.convert_to_tensor(base_strat, dtype=tf.float32)
+    
+# === Policy Representation === maybe change this to a more concrete model
+class NNPolicy():
+    def __init__(self, obs_dim, act_dim):
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(obs_dim,)),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(act_dim)
+        ])
+        self.trainable_variables = self.model.trainable_variables
+
+    def __call__(self, obs):
+        return self.model(obs)
+
+def create_policy_model_nn(obs_dim, act_dim):
+    return NNPolicy(obs_dim, act_dim)
+
+
+
+# === Train Best Response ===
+def train_best_response_nn(env: BidTradingEnv, policy_set_opponents, joint_distribution,player_idx, obs_dim, act_dim):
+    br_policy = create_policy_model_nn(obs_dim, act_dim)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+    
+    for epoch in range(50):
+        obs = env.reset()
+        done = False
+        while not done:
+            with tf.GradientTape() as tape:
+                logits = br_policy(tf.convert_to_tensor([obs[player_idx]], dtype=tf.float32))
+                action = tf.squeeze(logits).numpy()
+                actions = []
+                for i, pi in enumerate(policy_set_opponents):
+                    actions.append(tf.squeeze(pi(obs[i:i+1])).numpy() if i != player_idx else action)
+                _, rewards, done, _ = env.step(actions)
+                loss = -rewards[player_idx]  # maximize own utility
+            grads = tape.gradient(loss, br_policy.trainable_variables)
+            optimizer.apply_gradients(zip(grads, br_policy.trainable_variables))
+    return br_policy
+
+def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endowment, debug = False):
+    def sample_joint_strategy(joint_distribution):
+        keys = [joint_distribution[i][0] for i in range(len(joint_distribution))]
+        probabilities = [joint_distribution[i][1] for i in range(len(joint_distribution))]
+        selected_key = np.random.choice([i for i in range(len(joint_distribution))], p=probabilities)
+        return keys[selected_key]
+    
+    # Step 1: Sample opponent bid profiles
+    opponent_samples = []
+    for _ in range(200):
+        joint = sample_joint_strategy(joint_distribution)  # list of agent policies
+        opp_bids = tf.convert_to_tensor([pi for i, pi in enumerate(joint) if i != player_idx], dtype=tf.float32)
+        opponent_samples.append(opp_bids)
+    opponent_samples = tf.convert_to_tensor(opponent_samples, dtype=tf.float32)
+    
+    if debug:
+        print("opponent_samples generated: ", len(opponent_samples))
+    
+    # Step 2: Optimize agent's bid
+    agent_bid = tf.Variable(tf.random.uniform([4, 2], maxval=[[1, 1], endowment, [1, 1], endowment]), dtype=tf.float32)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.05)
+    
+    for epoch in range(100):  # optimization steps
+        with tf.GradientTape() as tape:
+            total = 0
+            # for opp_bids in opponent_samples:
+            #     all_bids = tf.concat([opp_bids[:player_idx], tf.convert_to_tensor([agent_bid], dtype=tf.float32), opp_bids[player_idx:]], axis=0)
+            #     _, utils, _, info = env.step(all_bids) # takes ~0.01s
+            #     total += utils[player_idx]
+            agent_bid_expanded = tf.expand_dims(tf.expand_dims(agent_bid, axis=0), axis=0)
+            batched_bids = tf.tile(agent_bid_expanded, multiples=[opponent_samples.shape[0], 1, 1, 1])
+            all_bids = tf.concat([opponent_samples[:, :player_idx], batched_bids, opponent_samples[:, player_idx:]], axis=1)
+            _, utils, _, info = env.vector_step(all_bids, debug = debug) # takes ~0.015s
+            total = tf.reduce_sum(utils[:, player_idx])
+            loss = -total / tf.cast(opponent_samples.shape[0], tf.float32) # Cast divisor just in case
+            if debug:
+                loss = tf.debugging.check_numerics(loss, "NaN/Inf in loss calculation") # Add check
+        grads = tape.gradient(loss, [agent_bid])
+        if debug:
+            grads = [tf.debugging.check_numerics(g, f"NaN/Inf in gradient for {agent_bid.name}") if g is not None else g for g in grads] # Add check
+        optimizer.apply_gradients(zip(grads, [agent_bid]))
+        if debug and epoch % 10 == 0:
+            print("\n\nepoch: ", epoch, "loss: ", loss)
+            print("agent_bid: \n", agent_bid.numpy())
+            print("executed_bids: \n", info["executed_bids"][0].numpy())
+            print("allocations: \n", info["allocations"][0].numpy())
+    
+    return agent_bid
+
+# === Meta-Game Construction ===
+def build_meta_game(env: BidTradingEnv, policy_sets):
+    joint_policies = list(itertools.product(*policy_sets))
+    meta_game = []
+    for i, joint in enumerate(joint_policies):
+        payoff = env.evaluate_policy_tuple(joint)
+        meta_game.append([joint, payoff])
+    return meta_game
+
+# === CCE Solver ===
+def solve_cce(meta_game, num_players, policy_sets):
+    joint_strats = [meta_game[i][0] for i in range(len(meta_game))]
+    joint_payoffs = np.array([meta_game[i][1] for i in range(len(meta_game))])
+    num_strats = len(joint_strats)
+    
+    sigma = cp.Variable(num_strats)
+    objective = cp.Maximize(-0.5 * cp.quad_form(sigma, np.eye(num_strats)))
+    constraints = [cp.sum(sigma) == 1, sigma >= 0]
+    for p in range(num_players):
+        for alt_pi in policy_sets[p]:
+            constraint_sum = 0
+            for i, pi in enumerate(joint_strats): # i is the index of the joint strategy, pi is the joint strategy
+                pi_alt = list(pi)
+                original_payoff = joint_payoffs[i][p] # get the payoff for the current strategy for player p
+                if alt_pi.numpy().all() == pi[p].numpy().all(): # if the alternate strategy is the same as the current strategy, skip
+                    alt_payoff = original_payoff
+                else:
+                    pi_alt[p] = alt_pi # update the current strategy for player p
+                    if tuple(pi_alt) not in joint_strats: # if the alternate strategy is not in the meta game, skip
+                        continue
+                    alt_payoff = joint_payoffs[joint_strats.index(tuple(pi_alt))][p] # get the payoff for the alternate strategy for player p
+                constraint_sum += sigma[i] * (alt_payoff - original_payoff) # add the constraint for the current strategy
+            constraints.append(constraint_sum <= 1e-4) # add the constraint to the list of constraints
+    prob = cp.Problem(objective, constraints)
+    prob.solve()
+    return [(joint_strats[i], sigma.value[i]) for i in range(len(joint_strats))]
+
+
+def run_training(debug = False, log_file = None):
+    # === Main Loop ===
+    num_players = 2
+    obs_dim, goods, act_per_good = 2, 2, 4
+    act_dim = goods * act_per_good
+    endowments = np.array([[4, 4], [4, 4]])
+    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
+    # optimal outcome is p=[1,1], x=[[6,2],[2,6]]
+    env = BidTradingEnv(endowments, alphas)
+    policy_sets = [[env.create_basic_policy(p)] for p in range(num_players)]
+    meta_game = build_meta_game(env, policy_sets)
+    sigma = solve_cce(meta_game, num_players, policy_sets)
+
+    if debug:
+        print("initial Configuration:")
+        print("policy_sets: ", [[pi.numpy() for pi in policy_sets[p]] for p in range(num_players)])
+        print("meta_game: ", [[i, payoff] for i, [joint, payoff] in enumerate(meta_game)])
+        print("sigma: ", [[i, sigma[i][1]] for i in range(len(sigma))])
+    elif log_file:
+        log_file_path = log_file + "_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
+        with open(log_file_path, "a") as f:
+            f.write(f"Beginning Log for {log_file_path}. Training run.\n")
+            f.write("ENVIRONMENT:\n")
+            f.write(f"endowments:\n{np.array2string(endowments)}\n")
+            f.write(f"alphas:\n{np.array2string(alphas)}\n")
+            f.write("--------------------------------\n")
+            f.write("Initial Configuration:\n")
+            policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
+            f.write(f"policy_sets: {policy_sets_str}\n")
+            meta_game_str = np.array2string(tf.convert_to_tensor([payoff for i, [joint, payoff] in enumerate(meta_game)]).numpy())
+            f.write(f"meta_game: {meta_game_str}\n")
+            sigma_str = np.array2string(tf.convert_to_tensor([sigma[i][1] for i in range(len(sigma))]).numpy())
+            f.write(f"sigma: {sigma_str}\n")
+            f.write("--------------------------------\n")
+
+    for epoch in range(50):
+        for p in range(num_players):
+            # train_best_response returns a tf.Variable, convert to numpy for logging
+            new_pi_var = train_best_response(env, sigma, p, endowments[p], debug=debug)
+            new_pi_np = new_pi_var.numpy() # Get numpy array from the Variable/Tensor
+
+            if debug:
+                print(f"new policy for player {p}:\n{new_pi_np}")
+            elif log_file:
+                with open(log_file_path, "a") as f:
+                    f.write(f"Epoch {epoch}, Player {p} new policy:\n{str(new_pi_np)}\n")
+            # Append the original tf.Variable/Tensor to policy_sets
+            policy_sets[p].append(new_pi_var)
+
+        meta_game = build_meta_game(env, policy_sets)
+        sigma = solve_cce(meta_game, num_players, policy_sets)
+
+        if not debug and log_file:
+            with open(log_file_path, "a") as f:
+                f.write("--------------------------------\n")
+                f.write(f"End of epoch {epoch}:\n")
+                policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
+                f.write(f"policy_sets: {policy_sets_str}\n")
+                meta_game_str = np.array2string(tf.convert_to_tensor([payoff for i, [joint, payoff] in enumerate(meta_game)]).numpy())
+                f.write(f"meta_game: {meta_game_str}\n")
+                sigma_str = np.array2string(tf.convert_to_tensor([sigma[i][1] for i in range(len(sigma))]).numpy())
+                f.write(f"sigma: {sigma_str}\n")
+                f.write("--------------------------------\n")
+
+    # --- Reset NumPy print options if needed elsewhere ---
+    # np.set_printoptions(threshold=1000, precision=8, suppress=False) # Reset to default or previous state
+
+def test_env():
+    endowments = np.array([[4, 4], [4, 4]])
+    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
+    env = BidTradingEnv(endowments, alphas)
+    bids_to_test = [tf.convert_to_tensor([[[1, 1], [1, 1], [1, 2], [1, 1]], [[1, 1], [1, 1], [2, 1], [1, 1]]], dtype=tf.float32), \
+                    tf.convert_to_tensor([[[1, 1], [2, 0], [1, 1], [0, 2]], [[1, 1], [0, 2], [1, 1], [2, 0]]], dtype=tf.float32), \
+                    tf.convert_to_tensor([[[1, 1], [2, 2], [1, 1], [-2, -2]], [[1, 1], [-2, -2], [1, 1], [2, 2]]], dtype=tf.float32)]
+    for bid in bids_to_test:
+        _, rewards, _, info = env.step(bid)
+        print("rewards: ", [reward.numpy() for reward in rewards])
+        print("executed_bids: ", info["executed_bids"].numpy())
+        print("allocations: ", [[alloc.numpy() for alloc in allocation] for allocation in info["allocations"]])
+        print("valid_bids: ", info["valid_bids"])
+        print("net_credit: ", info["net_credit"])
+        print("\n\n\n")
+
+if __name__ == "__main__":
+    run_training(debug = False, log_file = "oracle_log")
+    #test_env()
+
+
+
+
+
+
+'''
+@tf.function
     def match_trades(self, bids):
         """
         Computes the net buy/sell quantities and average prices for each player and good.
@@ -145,184 +424,4 @@ class BidTradingEnv:
             output_bids, *_ = tf.while_loop(loop_cond, loop_body, loop_vars, maximum_iterations=num_players * 2 + 1)
 
         return output_bids
-
-    def compute_utilities(self, allocations, net_credit):
-        utilities = []
-        for i, alloc in enumerate(allocations):
-            a1, a2 = self.alphas[i]
-            utility = (alloc[0] ** a1) * (alloc[1] ** a2) + 0.5 * min(0, net_credit[i])
-            utilities.append(utility)
-        return utilities
-
-    def evaluate_policy_tuple(self, policies):
-        obs = self.reset()
-        _, rewards, _, _ = self.step(tf.convert_to_tensor(policies, dtype=tf.float32))
-        return rewards
-    
-    def create_basic_policy(self, player_idx):
-        base_strat = [np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2, np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2]
-        return tf.convert_to_tensor(base_strat, dtype=tf.float32)
-    
-# === Policy Representation === maybe change this to a more concrete model
-class NNPolicy():
-    def __init__(self, obs_dim, act_dim):
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(obs_dim,)),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(act_dim)
-        ])
-        self.trainable_variables = self.model.trainable_variables
-
-    def __call__(self, obs):
-        return self.model(obs)
-
-def create_policy_model_nn(obs_dim, act_dim):
-    return NNPolicy(obs_dim, act_dim)
-
-
-
-# === Train Best Response ===
-def train_best_response_nn(env: BidTradingEnv, policy_set_opponents, joint_distribution,player_idx, obs_dim, act_dim):
-    br_policy = create_policy_model_nn(obs_dim, act_dim)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-    
-    for epoch in range(50):
-        obs = env.reset()
-        done = False
-        while not done:
-            with tf.GradientTape() as tape:
-                logits = br_policy(tf.convert_to_tensor([obs[player_idx]], dtype=tf.float32))
-                action = tf.squeeze(logits).numpy()
-                actions = []
-                for i, pi in enumerate(policy_set_opponents):
-                    actions.append(tf.squeeze(pi(obs[i:i+1])).numpy() if i != player_idx else action)
-                _, rewards, done, _ = env.step(actions)
-                loss = -rewards[player_idx]  # maximize own utility
-            grads = tape.gradient(loss, br_policy.trainable_variables)
-            optimizer.apply_gradients(zip(grads, br_policy.trainable_variables))
-    return br_policy
-
-def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endowment, debug = False):
-    def sample_joint_strategy(joint_distribution):
-        keys = [joint_distribution[i][0] for i in range(len(joint_distribution))]
-        probabilities = [joint_distribution[i][1] for i in range(len(joint_distribution))]
-        selected_key = np.random.choice([i for i in range(len(joint_distribution))], p=probabilities)
-        return keys[selected_key]
-    
-    # Step 1: Sample opponent bid profiles
-    opponent_samples = []
-    for _ in range(100):
-        joint = sample_joint_strategy(joint_distribution)  # list of agent policies
-        opp_bids = tf.convert_to_tensor([pi for i, pi in enumerate(joint) if i != player_idx], dtype=tf.float32)
-        opponent_samples.append(opp_bids)
-    
-    if debug:
-        print("opponent_samples generated: ", len(opponent_samples))
-    
-    # Step 2: Optimize agent's bid
-    agent_bid = tf.Variable(tf.random.uniform([4, 2], maxval=[[1, 1], endowment, [1, 1], endowment]), dtype=tf.float32)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.05)
-    
-    for epoch in range(50):  # optimization steps
-        with tf.GradientTape() as tape:
-            total = 0
-            for opp_bids in opponent_samples:
-                all_bids = tf.concat([opp_bids[:player_idx], tf.convert_to_tensor([agent_bid], dtype=tf.float32), opp_bids[player_idx:]], axis=0)
-                _, utils, _, info = env.step(all_bids) # takes ~0.01s
-                total += utils[player_idx]
-            loss = -total / len(opponent_samples)  # maximize expected utility
-        grads = tape.gradient(loss, [agent_bid])
-        optimizer.apply_gradients(zip(grads, [agent_bid]))
-        if debug and epoch % 10 == 0:
-            print("\n\nepoch: ", epoch, "loss: ", loss)
-            print("agent_bid: \n", agent_bid.numpy())
-            print("executed_bids: \n", info["executed_bids"].numpy())
-            print("allocations: \n", info["allocations"].numpy())
-    
-    return agent_bid
-
-# === Meta-Game Construction ===
-def build_meta_game(env: BidTradingEnv, policy_sets):
-    joint_policies = list(itertools.product(*policy_sets))
-    meta_game = []
-    for i, joint in enumerate(joint_policies):
-        payoff = env.evaluate_policy_tuple(joint)
-        meta_game.append([joint, payoff])
-    return meta_game
-
-# === CCE Solver ===
-def solve_cce(meta_game, num_players, policy_sets):
-    joint_strats = [meta_game[i][0] for i in range(len(meta_game))]
-    joint_payoffs = np.array([meta_game[i][1] for i in range(len(meta_game))])
-    num_strats = len(joint_strats)
-    
-    sigma = cp.Variable(num_strats)
-    objective = cp.Maximize(-0.5 * cp.quad_form(sigma, np.eye(num_strats)))
-    constraints = [cp.sum(sigma) == 1, sigma >= 0]
-    for p in range(num_players):
-        for alt_pi in policy_sets[p]:
-            constraint_sum = 0
-            for i, pi in enumerate(joint_strats): # i is the index of the joint strategy, pi is the joint strategy
-                pi_alt = list(pi)
-                original_payoff = joint_payoffs[i][p] # get the payoff for the current strategy for player p
-                if alt_pi.numpy().all() == pi[p].numpy().all(): # if the alternate strategy is the same as the current strategy, skip
-                    alt_payoff = original_payoff
-                else:
-                    pi_alt[p] = alt_pi # update the current strategy for player p
-                    if tuple(pi_alt) not in joint_strats: # if the alternate strategy is not in the meta game, skip
-                        continue
-                    alt_payoff = joint_payoffs[joint_strats.index(tuple(pi_alt))][p] # get the payoff for the alternate strategy for player p
-                constraint_sum += sigma[i] * (alt_payoff - original_payoff) # add the constraint for the current strategy
-            constraints.append(constraint_sum <= 1e-4) # add the constraint to the list of constraints
-    prob = cp.Problem(objective, constraints)
-    prob.solve()
-    return [(joint_strats[i], sigma.value[i]) for i in range(len(joint_strats))]
-
-
-def run_training(debug = False):
-    # === Main Loop ===
-    num_players = 2
-    obs_dim, goods, act_per_good = 2, 2, 4
-    act_dim = goods * act_per_good
-    endowments = np.array([[4, 4], [4, 4]])
-    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
-    # optimal outcome is p=[1,1], x=[[6,2],[2,6]]
-    env = BidTradingEnv(endowments, alphas)
-    policy_sets = [[env.create_basic_policy(p)] for p in range(num_players)]
-    meta_game = build_meta_game(env, policy_sets)
-    sigma = solve_cce(meta_game, num_players, policy_sets)
-
-    if debug:
-        print("initial Configuration:")
-        print("policy_sets: ", [[pi.numpy() for pi in policy_sets[p]] for p in range(num_players)])
-        print("meta_game: ", [[i, payoff] for i, [joint, payoff] in enumerate(meta_game)])
-        print("sigma: ", [[i, sigma[i][1]] for i in range(len(sigma))])
-
-    for epoch in range(10):
-        for p in range(num_players):
-            new_pi = train_best_response(env, sigma, p, endowments[p], debug=debug)
-            if debug:
-                print("new policy for player ", p, ": ", new_pi)
-            policy_sets[p].append(new_pi)
-        meta_game = build_meta_game(env, policy_sets)
-        sigma = solve_cce(meta_game, num_players, policy_sets)
-
-def test_env():
-    endowments = np.array([[4, 4], [4, 4]])
-    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
-    env = BidTradingEnv(endowments, alphas)
-    bids_to_test = [tf.convert_to_tensor([[[1, 1], [1, 1], [1, 2], [1, 1]], [[1, 1], [1, 1], [2, 1], [1, 1]]], dtype=tf.float32), \
-                    tf.convert_to_tensor([[[1, 1], [2, 0], [1, 1], [0, 2]], [[1, 1], [0, 2], [1, 1], [2, 0]]], dtype=tf.float32), \
-                    tf.convert_to_tensor([[[1, 1], [2, 2], [1, 1], [-2, -2]], [[1, 1], [-2, -2], [1, 1], [2, 2]]], dtype=tf.float32)]
-    for bid in bids_to_test:
-        _, rewards, _, info = env.step(bid)
-        print("rewards: ", [reward.numpy() for reward in rewards])
-        print("executed_bids: ", info["executed_bids"].numpy())
-        print("allocations: ", [[alloc.numpy() for alloc in allocation] for allocation in info["allocations"]])
-        print("valid_bids: ", info["valid_bids"])
-        print("net_credit: ", info["net_credit"])
-        print("\n\n\n")
-if __name__ == "__main__":
-    run_training(debug = True)
-    #test_env()
+'''

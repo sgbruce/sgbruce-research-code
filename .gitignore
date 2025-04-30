@@ -5,4 +5,5 @@ correlated/__pycache__/
 researchenv/
 no_regret/__pycache__/
 no_regret/training_data_*.json
+no_regret/oracle_log_*.txt
 *.h5

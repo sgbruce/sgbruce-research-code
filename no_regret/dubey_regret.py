@@ -454,8 +454,8 @@ class DubeyGame:
             )
 
             # Avoid div by zero
-            avg_buy_price = tf.where(bq_sum > 0, bp_sum / bq_sum, bp_fin)
-            avg_sell_price = tf.where(sq_sum > 0, sp_sum / sq_sum, sp_fin)
+            avg_buy_price = tf.where(bq_sum > 0, tf.math.divide_no_nan(bp_sum, bq_sum), bp_fin)
+            avg_sell_price = tf.where(sq_sum > 0, tf.math.divide_no_nan(sp_sum, sq_sum), sp_fin)
 
             # Restore original player order
             buy_inv_idx = buy_inverse_indices[:, :, good_idx]
