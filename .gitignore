@@ -6,4 +6,6 @@ researchenv/
 no_regret/__pycache__/
 no_regret/training_data_*.json
 no_regret/oracle_log_*.txt
+no_regret/logs/*
+no_regret/results/*
 *.h5

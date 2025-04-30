@@ -4,6 +4,8 @@ import tensorflow as tf
 import cvxpy as cp
 import itertools
 import time
+import json
+import os
 from datetime import datetime
 import dubey_regret as dubey
 
@@ -11,11 +13,21 @@ import dubey_regret as dubey
 # This prevents NumPy from truncating large arrays with '...'
 np.set_printoptions(threshold=np.inf, precision=4, suppress=True)
 
+PARAM_DICT = {
+    "solver_name": "Adam",
+    "solver": tf.keras.optimizers.Adam,
+    "amsgrad": True,
+    "learning_rate": 0.05,
+    "max_epochs": 20,
+    "best_response_epochs": 100,
+    "best_response_samples": 200,
+}
+
 # === Custom Trading Environment ===
 class BidTradingEnv(dubey.DubeyGame):
     def __init__(self, endowments, cobb_douglas_exponents):
-        super().__init__(2)
-        self.num_goods = 2
+        super().__init__(len(endowments[0]))
+        self.num_goods = len(endowments[0])
         self.endowments = endowments  # list of shape (num_players, num_goods)
         self.num_players = len(endowments)
         self.alphas = tf.convert_to_tensor(cobb_douglas_exponents, dtype=tf.float32)  # list of shape (num_players, num_goods)
@@ -146,7 +158,7 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     
     # Step 1: Sample opponent bid profiles
     opponent_samples = []
-    for _ in range(200):
+    for _ in range(PARAM_DICT["best_response_samples"]):
         joint = sample_joint_strategy(joint_distribution)  # list of agent policies
         opp_bids = tf.convert_to_tensor([pi for i, pi in enumerate(joint) if i != player_idx], dtype=tf.float32)
         opponent_samples.append(opp_bids)
@@ -157,9 +169,13 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     
     # Step 2: Optimize agent's bid
     agent_bid = tf.Variable(tf.random.uniform([4, 2], maxval=[[1, 1], endowment, [1, 1], endowment]), dtype=tf.float32)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.05)
+
+    if PARAM_DICT["solver_name"] == "Adam":
+        optimizer = PARAM_DICT["solver"](learning_rate=PARAM_DICT["learning_rate"], amsgrad=PARAM_DICT["amsgrad"])
+    else:
+        optimizer = PARAM_DICT["solver"](learning_rate=PARAM_DICT["learning_rate"])
     
-    for epoch in range(100):  # optimization steps
+    for epoch in range(PARAM_DICT["best_response_epochs"]):  # optimization steps
         with tf.GradientTape() as tape:
             total = 0
             # for opp_bids in opponent_samples:
@@ -197,42 +213,98 @@ def build_meta_game(env: BidTradingEnv, policy_sets):
 
 # === CCE Solver ===
 def solve_cce(meta_game, num_players, policy_sets):
-    joint_strats = [meta_game[i][0] for i in range(len(meta_game))]
-    joint_payoffs = np.array([meta_game[i][1] for i in range(len(meta_game))])
+    joint_strats = [meta_game[i][0] for i in range(len(meta_game))] # List of tuples of Tensors
+    # Ensure payoffs are numpy for indexing and calculations within the solver
+    joint_payoffs = np.array([meta_game[i][1].numpy() for i in range(len(meta_game))])
     num_strats = len(joint_strats)
-    
+
+    # Helper function to compare two strategies (tensors) for equality
+    def compare_strategies(strat1, strat2):
+        s1 = tf.convert_to_tensor(strat1)
+        s2 = tf.convert_to_tensor(strat2)
+        return tf.reduce_all(tf.equal(s1, s2)).numpy()
+
+    # Helper function to compare two joint strategies (tuples of tensors)
+    def compare_joint_strategies(joint_strat1, joint_strat2):
+        if len(joint_strat1) != len(joint_strat2):
+            return False
+        for p in range(len(joint_strat1)):
+            if not compare_strategies(joint_strat1[p], joint_strat2[p]):
+                return False
+        return True
+
     sigma = cp.Variable(num_strats)
-    objective = cp.Maximize(-0.5 * cp.quad_form(sigma, np.eye(num_strats)))
+    # Objective: Maximize entropy (or minimize negative entropy proxy) for a less extreme CCE
+    # Using a simple quadratic form (-0.5 * ||sigma||^2) encourages smoother distributions
+    objective = cp.Maximize(-0.5 * cp.sum_squares(sigma))
     constraints = [cp.sum(sigma) == 1, sigma >= 0]
+
     for p in range(num_players):
-        for alt_pi in policy_sets[p]:
+        for alt_pi in policy_sets[p]: # alt_pi is a Tensor representing a strategy
             constraint_sum = 0
-            for i, pi in enumerate(joint_strats): # i is the index of the joint strategy, pi is the joint strategy
-                pi_alt = list(pi)
-                original_payoff = joint_payoffs[i][p] # get the payoff for the current strategy for player p
-                if alt_pi.numpy().all() == pi[p].numpy().all(): # if the alternate strategy is the same as the current strategy, skip
-                    alt_payoff = original_payoff
+            for i, pi in enumerate(joint_strats): # pi is a tuple of Tensors representing a joint strategy
+                original_payoff = joint_payoffs[i, p] 
+
+                # Check if the alternative strategy is the same as the current one for player p
+                if compare_strategies(alt_pi, pi[p]):
+                    continue
+                
+                # Construct the alternative joint strategy tuple
+                pi_alt_list = list(pi)
+                pi_alt_list[p] = alt_pi
+                pi_alt_tuple = tuple(pi_alt_list)
+
+                # Find the index of this alternative strategy in joint_strats
+                found_alt = False
+                alt_index = -1
+                for idx, js in enumerate(joint_strats):
+                    if compare_joint_strategies(pi_alt_tuple, js):
+                        found_alt = True
+                        alt_index = idx
+                        break
+
+                if not found_alt:
+                    # This deviation is not possible within the pre-calculated meta_game
+                    print(f"Warning: Alt strategy not found in meta_game for constraint check.") 
+                    continue
+
                 else:
-                    pi_alt[p] = alt_pi # update the current strategy for player p
-                    if tuple(pi_alt) not in joint_strats: # if the alternate strategy is not in the meta game, skip
-                        continue
-                    alt_payoff = joint_payoffs[joint_strats.index(tuple(pi_alt))][p] # get the payoff for the alternate strategy for player p
-                constraint_sum += sigma[i] * (alt_payoff - original_payoff) # add the constraint for the current strategy
-            constraints.append(constraint_sum <= 1e-4) # add the constraint to the list of constraints
+                    # Get the payoff for the alternate strategy using the found index
+                    alt_payoff = joint_payoffs[alt_index, p]
+
+                # Accumulate the expected gain/loss from deviation for this joint strategy i
+                constraint_sum += sigma[i] * (alt_payoff - original_payoff)
+
+            # Add the CCE constraint: Expected payoff from deviating should not be greater than original
+            constraints.append(constraint_sum <= 1e-4) # Use a small tolerance
+
     prob = cp.Problem(objective, constraints)
-    prob.solve()
-    return [(joint_strats[i], sigma.value[i]) for i in range(len(joint_strats))]
 
+    try:
+        prob.solve()
+    except Exception as e:
+        print(f"Error: {e}")
+        return [(joint_strats[i], 1.0/num_strats) for i in range(num_strats)]
 
-def run_training(debug = False, log_file = None):
-    # === Main Loop ===
-    num_players = 2
-    obs_dim, goods, act_per_good = 2, 2, 4
-    act_dim = goods * act_per_good
-    endowments = np.array([[4, 4], [4, 4]])
-    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
-    # optimal outcome is p=[1,1], x=[[6,2],[2,6]]
-    env = BidTradingEnv(endowments, alphas)
+    # Check solver status
+    if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+        print(f"Warning: CCE Solver failed or found inaccurate solution. Status: {prob.status}")
+        return [(joint_strats[i], 1.0/num_strats) for i in range(num_strats)]
+
+    # Handle case where sigma.value might be None if solver fails
+    sigma_value = sigma.value if sigma.value is not None else np.zeros(num_strats)
+    # Normalize sigma_value just in case of small numerical errors
+    sigma_value = np.maximum(sigma_value, 0) # Ensure non-negative
+    sigma_sum = np.sum(sigma_value)
+    if sigma_sum > 1e-6:
+        sigma_value /= sigma_sum
+    else: # Handle case of all zeros (e.g., solver failure)
+        sigma_value = np.ones(num_strats) / num_strats
+
+    return [(joint_strats[i], sigma_value[i]) for i in range(len(joint_strats))]
+
+def jprso(env: BidTradingEnv, debug = False, log_file = None):
+    num_players = env.num_players
     policy_sets = [[env.create_basic_policy(p)] for p in range(num_players)]
     meta_game = build_meta_game(env, policy_sets)
     sigma = solve_cce(meta_game, num_players, policy_sets)
@@ -243,13 +315,7 @@ def run_training(debug = False, log_file = None):
         print("meta_game: ", [[i, payoff] for i, [joint, payoff] in enumerate(meta_game)])
         print("sigma: ", [[i, sigma[i][1]] for i in range(len(sigma))])
     elif log_file:
-        log_file_path = log_file + "_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt"
-        with open(log_file_path, "a") as f:
-            f.write(f"Beginning Log for {log_file_path}. Training run.\n")
-            f.write("ENVIRONMENT:\n")
-            f.write(f"endowments:\n{np.array2string(endowments)}\n")
-            f.write(f"alphas:\n{np.array2string(alphas)}\n")
-            f.write("--------------------------------\n")
+        with open(log_file, "a") as f:
             f.write("Initial Configuration:\n")
             policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
             f.write(f"policy_sets: {policy_sets_str}\n")
@@ -259,16 +325,17 @@ def run_training(debug = False, log_file = None):
             f.write(f"sigma: {sigma_str}\n")
             f.write("--------------------------------\n")
 
-    for epoch in range(50):
+    for epoch in range(PARAM_DICT["max_epochs"]):
+        t = time.time()
         for p in range(num_players):
             # train_best_response returns a tf.Variable, convert to numpy for logging
-            new_pi_var = train_best_response(env, sigma, p, endowments[p], debug=debug)
+            new_pi_var = train_best_response(env, sigma, p, env.endowments[p], debug=debug)
             new_pi_np = new_pi_var.numpy() # Get numpy array from the Variable/Tensor
 
             if debug:
                 print(f"new policy for player {p}:\n{new_pi_np}")
             elif log_file:
-                with open(log_file_path, "a") as f:
+                with open(log_file, "a") as f:
                     f.write(f"Epoch {epoch}, Player {p} new policy:\n{str(new_pi_np)}\n")
             # Append the original tf.Variable/Tensor to policy_sets
             policy_sets[p].append(new_pi_var)
@@ -277,7 +344,7 @@ def run_training(debug = False, log_file = None):
         sigma = solve_cce(meta_game, num_players, policy_sets)
 
         if not debug and log_file:
-            with open(log_file_path, "a") as f:
+            with open(log_file, "a") as f:
                 f.write("--------------------------------\n")
                 f.write(f"End of epoch {epoch}:\n")
                 policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
@@ -287,30 +354,67 @@ def run_training(debug = False, log_file = None):
                 sigma_str = np.array2string(tf.convert_to_tensor([sigma[i][1] for i in range(len(sigma))]).numpy())
                 f.write(f"sigma: {sigma_str}\n")
                 f.write("--------------------------------\n")
+        print(f"Epoch {epoch} took {round(time.time() - t, 2)} seconds")
+    return sigma
 
-    # --- Reset NumPy print options if needed elsewhere ---
-    # np.set_printoptions(threshold=1000, precision=8, suppress=False) # Reset to default or previous state
-
-def test_env():
+def run_training(debug = False, log_file = None):
+    # === Main Loop ===
     endowments = np.array([[4, 4], [4, 4]])
     alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
+    # optimal outcome is p=[1,1], x=[[6,2],[2,6]]
     env = BidTradingEnv(endowments, alphas)
-    bids_to_test = [tf.convert_to_tensor([[[1, 1], [1, 1], [1, 2], [1, 1]], [[1, 1], [1, 1], [2, 1], [1, 1]]], dtype=tf.float32), \
-                    tf.convert_to_tensor([[[1, 1], [2, 0], [1, 1], [0, 2]], [[1, 1], [0, 2], [1, 1], [2, 0]]], dtype=tf.float32), \
-                    tf.convert_to_tensor([[[1, 1], [2, 2], [1, 1], [-2, -2]], [[1, 1], [-2, -2], [1, 1], [2, 2]]], dtype=tf.float32)]
-    for bid in bids_to_test:
-        _, rewards, _, info = env.step(bid)
-        print("rewards: ", [reward.numpy() for reward in rewards])
-        print("executed_bids: ", info["executed_bids"].numpy())
-        print("allocations: ", [[alloc.numpy() for alloc in allocation] for allocation in info["allocations"]])
-        print("valid_bids: ", info["valid_bids"])
-        print("net_credit: ", info["net_credit"])
-        print("\n\n\n")
+
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(f"Beginning Log for {log_file}. at time {datetime.now().strftime('%Y%m%d_%H%M%S')}. Training run.\n")
+            f.write("ENVIRONMENT:\n")
+            f.write(f"endowments:\n{np.array2string(endowments)}\n")
+            f.write(f"alphas:\n{np.array2string(alphas)}\n")
+            f.write("--------------------------------\n")
+
+    ret = jprso(env, debug = debug, log_file = log_file)
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(f"End of training at time: {datetime.now().strftime('%Y%m%d_%H%M%S')}\n")
+    return ret
+    
 
 if __name__ == "__main__":
-    run_training(debug = False, log_file = "oracle_log")
-    #test_env()
+    #run_training(debug = False, log_file = None)
+    optimizers = [[tf.keras.optimizers.RMSprop, "RMSprop"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.SGD, "SGD"]]
+    learning_rates = [0.001, 0.01, 0.05, 0.1, 1]
 
+    # Vary these after finding the best optimizer
+    max_epochs = [5, 10, 20, 30]
+    best_response_epochs = [10, 50, 100, 200, 500]
+    best_response_samples = [10, 100, 200, 500, 1000]
+
+    log_prefix = f"jprso_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
+    os.makedirs(f"logs/{log_prefix}", exist_ok=True)
+    os.makedirs(f"results/{log_prefix}", exist_ok=True)
+
+    adam_seen = False
+    for optimizer, optimizer_name in optimizers:
+        for learning_rate in learning_rates:
+            if optimizer_name == "Adam" and adam_seen:
+                PARAM_DICT["amsgrad"] = True
+            else:
+                PARAM_DICT["amsgrad"] = False
+                adam_seen = True
+            PARAM_DICT["solver"] = optimizer
+            PARAM_DICT["solver_name"] = optimizer_name
+            PARAM_DICT["learning_rate"] = learning_rate
+            
+            optimizer_name = PARAM_DICT["solver_name"]
+            learning_rate = PARAM_DICT["learning_rate"]
+            # Add parentheses around the entire conditional expression
+            log_filename = f"jprso_{(optimizer_name + '_amsgrad' if PARAM_DICT['amsgrad'] and optimizer_name == 'Adam' else optimizer_name)}_{learning_rate}_{PARAM_DICT['max_epochs']}_{PARAM_DICT['best_response_epochs']}_{PARAM_DICT['best_response_samples']}"
+            sigma = run_training(debug = False, log_file = f"logs/{log_prefix}{log_filename}.txt")
+            sigma_processed = [[[strat.numpy().tolist() for strat in joint], prob] for joint, prob in sigma]
+            with open(f"results/{log_prefix}{log_filename}.json", "a") as f:
+                f.write(f"{json.dumps(sigma_processed)}\n")
+
+                    
 
 
 
