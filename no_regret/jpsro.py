@@ -236,7 +236,7 @@ def solve_cce(meta_game, num_players, policy_sets):
     sigma = cp.Variable(num_strats)
     # Objective: Maximize entropy (or minimize negative entropy proxy) for a less extreme CCE
     # Using a simple quadratic form (-0.5 * ||sigma||^2) encourages smoother distributions
-    objective = cp.Maximize(-0.5 * cp.sum_squares(sigma))
+    objective = cp.Maximize(cp.sum(joint_payoffs.T @ sigma))
     constraints = [cp.sum(sigma) == 1, sigma >= 0]
 
     for p in range(num_players):

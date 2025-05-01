@@ -1,6 +1,8 @@
 import numpy as np
 import tensorflow as tf
 import json
+import os
+import matplotlib.pyplot as plt
 from jpsro import BidTradingEnv, solve_cce
 
 # This prevents NumPy from truncating large arrays with '...'
@@ -109,7 +111,7 @@ def analyze_results(res_file: str):
     net_credit_neg_prob = np.zeros(num_players)
     for result in results:
         _, rewards, _, info = env.step(tf.convert_to_tensor(result[0], dtype=tf.float32))
-        all_outcomes.append({"rewards": rewards, "info": info, "prob": result[1]})
+        all_outcomes.append({"bids": result[0], "rewards": rewards, "info": info, "prob": result[1]})
         avg_reward += np.array([reward.numpy() for reward in rewards]) * result[1]
         avg_executed_trade += info["executed_bids"].numpy() * result[1]
         invalid_bid_count += (info["valid_bids"].numpy() == 0)
@@ -117,7 +119,7 @@ def analyze_results(res_file: str):
         invalid_bid_prob += (info["valid_bids"].numpy() == 0) * result[1]
         net_credit_neg_prob += (info["net_credit"].numpy() < -0.25) * result[1]
     print("average reward: ", avg_reward)
-    print("average executed trade: ", avg_executed_trade)
+    print("average executed trade: \n", avg_executed_trade)
     print("invalid bid count: ", invalid_bid_count)
     print("invalid bid prob: ", invalid_bid_prob)
     print("net credit neg count: ", net_credit_neg_count)
@@ -128,6 +130,7 @@ def analyze_results(res_file: str):
     # compute best trade / utility and percentage of time it is played
     best_outcome = max(all_outcomes, key=lambda x: tf.reduce_sum(x["rewards"]))
     print("utility of best outcome: ", [reward.numpy() for reward in best_outcome["rewards"]])
+    print("bids: \n", np.array(best_outcome["bids"]))
     print("executed bids: \n", best_outcome["info"]["executed_bids"].numpy())
     print("allocations: \n", [[alloc.numpy() for alloc in allocation] for allocation in best_outcome["info"]["allocations"]])
     print("valid_bids: \n", best_outcome["info"]["valid_bids"].numpy())
@@ -138,7 +141,79 @@ def analyze_results(res_file: str):
 
     # make graph of cdf, where y axis is probability integral and x axis is utility
 
+    # Calculate the sum of utilities for each outcome
+    total_utilities = [tf.reduce_sum(outcome["rewards"]).numpy() for outcome in all_outcomes]
+    p1_utilities = [outcome["rewards"][0].numpy() for outcome in all_outcomes]
+    p2_utilities = [outcome["rewards"][1].numpy() for outcome in all_outcomes]
+
+    # Sort outcomes by utility
+    sorted_outcomes = sorted(zip(total_utilities, all_outcomes), key=lambda x: x[0])
+    sorted_p1_outcomes = sorted(zip(p1_utilities, all_outcomes), key=lambda x: x[0])
+    sorted_p2_outcomes = sorted(zip(p2_utilities, all_outcomes), key=lambda x: x[0])
+
+    # Calculate cumulative probabilities for total utilities
+    cumulative_probabilities_total = []
+    cumulative_prob_total = 0
+    for _, outcome in sorted_outcomes:
+        cumulative_prob_total += outcome["prob"]
+        cumulative_probabilities_total.append(cumulative_prob_total)
+
+    # Extract sorted total utilities for plotting
+    sorted_total_utilities = [utility for utility, _ in sorted_outcomes]
+
+    # Calculate cumulative probabilities for player 1 utilities
+    cumulative_probabilities_p1 = []
+    cumulative_prob_p1 = 0
+    for _, outcome in sorted_p1_outcomes:
+        cumulative_prob_p1 += outcome["prob"]
+        cumulative_probabilities_p1.append(cumulative_prob_p1)
+
+    # Extract sorted player 1 utilities for plotting
+    sorted_p1_utilities = [utility for utility, _ in sorted_p1_outcomes]
+
+    # Calculate cumulative probabilities for player 2 utilities
+    cumulative_probabilities_p2 = []
+    cumulative_prob_p2 = 0
+    for _, outcome in sorted_p2_outcomes:
+        cumulative_prob_p2 += outcome["prob"]
+        cumulative_probabilities_p2.append(cumulative_prob_p2)
+
+    # Extract sorted player 2 utilities for plotting
+    sorted_p2_utilities = [utility for utility, _ in sorted_p2_outcomes]
+
+    # Plot the CDFs in a grid
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+
+    # Plot total utilities CDF
+    axs[0].plot(sorted_total_utilities, cumulative_probabilities_total, marker='o')
+    axs[0].set_title('Total Welfare CDF')
+    axs[0].set_xlabel('Total Welfare of the Bid')
+    axs[0].set_ylabel('Cumulative Probability')
+    axs[0].grid(True)
+
+    # Plot player 1 utilities CDF
+    axs[1].plot(sorted_p1_utilities, cumulative_probabilities_p1, marker='o', color='orange')
+    axs[1].set_title('Player 1 Utility CDF')
+    axs[1].set_xlabel('Player 1 Utility')
+    axs[1].set_ylabel('Cumulative Probability')
+    axs[1].grid(True)
+
+    # Plot player 2 utilities CDF
+    axs[2].plot(sorted_p2_utilities, cumulative_probabilities_p2, marker='o', color='green')
+    axs[2].set_title('Player 2 Utility CDF')
+    axs[2].set_xlabel('Player 2 Utility')
+    axs[2].set_ylabel('Cumulative Probability')
+    axs[2].grid(True)
+
+    plt.suptitle(f'Cumulative Distribution Functions of Outcomes\n{file.split(".js")[0]}')
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
 if __name__ == "__main__":
     #test_env()
     # test_solver()
-    analyze_results("results/jprso_wrong_util/jprso_RMSprop_0.01_20_100_200.json")
+    directory = "results/jprso_wrong_util"
+    files_in_directory = os.listdir(directory)
+    for file in files_in_directory:
+        print(file)
+        analyze_results(directory + "/" + file)
