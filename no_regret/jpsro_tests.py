@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import json
 import os
+import csv
 import matplotlib.pyplot as plt
 from jpsro import BidTradingEnv, solve_cce
 
@@ -61,6 +62,48 @@ def test_solver():
 
     print("Prof Bryce example passed")
 
+def get_file_stats(file: str):
+    num_players = 2
+    num_goods = 2
+    with open(file, "r") as f:
+        results = json.load(f)
+    nonzero_results = [result for result in results if result[1] > 1e-4]
+    significant_results = [result for result in results if result[1] > 1e-2]
+    
+    max_prob_result = max(results, key=lambda x: x[1])
+    all_max_prob_results = [result for result in results if max_prob_result[1] - result[1] < 1e-4]
+
+    # set up the trading environment used for training
+    endowments = np.array([[4, 4], [4, 4]])
+    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
+    env = BidTradingEnv(endowments, alphas)
+
+    _, rewards, _, info = env.step(tf.convert_to_tensor(max_prob_result[0], dtype=tf.float32))
+
+    # compute average trade / utility
+    all_outcomes = []
+    avg_reward = np.zeros(num_players)
+    avg_executed_trade = np.zeros((num_players, 4, num_goods))
+    invalid_bid_count = np.zeros(num_players)
+    invalid_bid_prob = np.zeros(num_players)
+    net_credit_neg_count = np.zeros(num_players)
+    net_credit_neg_prob = np.zeros(num_players)
+    for result in results:
+        _, rewards, _, info = env.step(tf.convert_to_tensor(result[0], dtype=tf.float32))
+        all_outcomes.append({"bids": result[0], "rewards": rewards, "info": info, "prob": result[1]})
+        avg_reward += np.array([reward.numpy() for reward in rewards]) * result[1]
+        avg_executed_trade += info["executed_bids"].numpy() * result[1]
+        invalid_bid_count += (info["valid_bids"].numpy() == 0)
+        net_credit_neg_count += (info["net_credit"].numpy() < -0.25)
+        invalid_bid_prob += (info["valid_bids"].numpy() == 0) * result[1]
+        net_credit_neg_prob += (info["net_credit"].numpy() < -0.25) * result[1]
+    
+    return {"avg_reward": avg_reward, "avg_executed_trade": avg_executed_trade, \
+            "invalid_bid_count": invalid_bid_count, "invalid_bid_prob": invalid_bid_prob, \
+            "net_credit_neg_count": net_credit_neg_count, "net_credit_neg_prob": net_credit_neg_prob, \
+            "max_prob_result": max_prob_result, "all_max_prob_results": all_max_prob_results, \
+            "num_strats": len(results), "num_nonzero_strats": len(nonzero_results), \
+            "num_significant_strats": len(significant_results), "num_all_max_prob_strats": len(all_max_prob_results)}
 '''
 Analyze the results of a JPSRO training run. takes in a results file which is expected 
 to be in the format of the results file from the JPSRO training run: a json file with a 
@@ -209,11 +252,160 @@ def analyze_results(res_file: str):
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
-if __name__ == "__main__":
-    #test_env()
-    # test_solver()
-    directory = "results/jprso_wrong_util"
+def plot_optimizer_sweep(directory: str):
     files_in_directory = os.listdir(directory)
+    file_map = []
     for file in files_in_directory:
-        print(file)
-        analyze_results(directory + "/" + file)
+        file_name = file.split(".js")[0]
+        file_name = file_name.split("_")
+        optimizer = file_name[1]
+        learning_rate = file_name[2]
+        max_epochs = file_name[3]
+        best_response_epochs = file_name[4]
+        best_response_samples = file_name[5]
+        file_map.append({"file": file, "optimizer": optimizer, "learning_rate": learning_rate, "max_epochs": max_epochs, "best_response_epochs": best_response_epochs, "best_response_samples": best_response_samples})
+    
+    optimizer_data = {}
+    for file in file_map:
+        stats = get_file_stats(directory + "/" + file["file"])
+        avg_reward = np.sum(stats["avg_reward"])  # Calculate the mean of average rewards
+        optimizer = file["optimizer"]
+        learning_rate = float(file["learning_rate"])
+
+        if optimizer not in optimizer_data:
+            optimizer_data[optimizer] = {"learning_rates": [], "avg_rewards": []}
+
+        optimizer_data[optimizer]["learning_rates"].append(learning_rate)
+        optimizer_data[optimizer]["avg_rewards"].append(avg_reward)
+
+    plt.figure(figsize=(15, 9))
+    # Sort the data by learning rate for each optimizer
+    for optimizer, data in optimizer_data.items():
+        sorted_indices = np.argsort(data["learning_rates"])
+        sorted_learning_rates = np.array(data["learning_rates"])[sorted_indices]
+        sorted_avg_rewards = np.array(data["avg_rewards"])[sorted_indices]
+        
+        # Plot average reward vs. learning rate for each optimizer
+        plt.plot(sorted_learning_rates, sorted_avg_rewards, marker='o', label=optimizer)
+
+    plt.title('Average Reward vs. Learning Rate')
+    plt.xlabel('Learning Rate')
+    plt.ylabel('Average Reward')
+    plt.xscale('log')  # Use logarithmic scale for learning rate
+    plt.legend(title='Optimizer')
+    plt.grid(True)
+    plt.show()
+
+def plot_parameter_sweep(directory: str):
+    files_in_directory = os.listdir(directory)
+    file_map = []
+    for file in files_in_directory:
+        file_name = file.split(".js")[0]
+        file_name = file_name.split("_")
+        optimizer = file_name[1]
+        learning_rate = file_name[2]
+        max_epochs = file_name[3]
+        best_response_epochs = file_name[4]
+        best_response_samples = file_name[5]
+        file_map.append({"file": file, "optimizer": optimizer, "learning_rate": learning_rate, "max_epochs": max_epochs, "best_response_epochs": best_response_epochs, "best_response_samples": best_response_samples})
+    
+    max_epochs_data = {}
+    for file in file_map:
+        learning_rate = float(file["learning_rate"])
+        if learning_rate == 0.005:
+            continue  # Ignore trials with learning_rate=0.005
+
+        stats = get_file_stats(directory + "/" + file["file"])
+        avg_reward = np.sum(stats["avg_reward"])  # Calculate the mean of average rewards
+        max_epochs = int(file["max_epochs"])
+        best_response_epochs = file["best_response_epochs"]
+        best_response_samples = file["best_response_samples"]
+
+        # Create a unique key for the combination of best_response_epochs and best_response_samples
+        key = (best_response_epochs, best_response_samples)
+
+        if key not in max_epochs_data:
+            max_epochs_data[key] = {"max_epochs": [], "avg_rewards": []}
+
+        max_epochs_data[key]["max_epochs"].append(max_epochs)
+        max_epochs_data[key]["avg_rewards"].append(avg_reward)
+
+    plt.figure(figsize=(8, 4))
+    # Sort the data by max_epochs for each combination of best_response_epochs and best_response_samples
+    for key, data in max_epochs_data.items():
+        sorted_indices = np.argsort(data["max_epochs"])
+        sorted_max_epochs = np.array(data["max_epochs"])[sorted_indices]
+        sorted_avg_rewards = np.array(data["avg_rewards"])[sorted_indices]
+        
+        # Plot average reward vs. max_epochs for each combination
+        plt.plot(sorted_max_epochs, sorted_avg_rewards, marker='o', label=f"BR Epochs: {key[0]}, BR Samples: {key[1]}")
+
+    plt.title('Average Reward vs. Max Epochs')
+    plt.xlabel('Max Epochs')
+    plt.ylabel('Average Reward')
+    plt.legend(title='BR Epochs & Samples')
+    plt.grid(True)
+    plt.show()
+
+def reward_to_csv(directory: str):
+    files_in_directory = os.listdir(directory)
+    file_map = []
+    for file in files_in_directory:
+        file_name = file.split(".js")[0]
+        file_name = file_name.split("_")
+        optimizer = file_name[1]
+        learning_rate = file_name[2]
+        max_epochs = file_name[3]
+        best_response_epochs = file_name[4]
+        best_response_samples = file_name[5]
+        file_map.append({"file": file, "optimizer": optimizer, "learning_rate": learning_rate, "max_epochs": max_epochs, "best_response_epochs": best_response_epochs, "best_response_samples": best_response_samples})
+
+    # Get the stats for each file and write to a CSV
+    csv_filename = "reward_stats.csv"
+    with open(csv_filename, mode='w', newline='') as csv_file:
+        fieldnames = ['max_epochs', 'best_response_epochs', 'best_response_samples', 
+                    'p1 avg. utility', 'p2 avg. utility', 'average utility sum']
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+
+        stats_list = []
+        for file in file_map:
+            learning_rate = float(file["learning_rate"])
+            if learning_rate == 0.005:
+                continue  # Exclude learning rate 0.005
+
+            stats = get_file_stats(directory + "/" + file["file"])
+            avg_reward = stats["avg_reward"]
+            avg_utility_sum = np.sum(avg_reward)
+            max_epochs = int(file["max_epochs"])
+            best_response_epochs = file["best_response_epochs"]
+            best_response_samples = file["best_response_samples"]
+
+            stats_list.append({
+                'max_epochs': max_epochs,
+                'best_response_epochs': best_response_epochs,
+                'best_response_samples': best_response_samples,
+                'p1 avg. utility': round(avg_reward[0], 3),
+                'p2 avg. utility': round(avg_reward[1], 3),
+                'average utility sum': round(avg_utility_sum, 3)
+            })
+
+        # Sort the stats by average utility sum
+        stats_list.sort(key=lambda x: x['average utility sum'], reverse=True)
+
+        # Write sorted stats to CSV
+        for stats in stats_list:
+            writer.writerow(stats)
+    
+
+
+if __name__ == "__main__":
+    # test_env()
+    # test_solver()
+    # directory = "results/jpsro_param"
+    # files_in_directory = ["jprso_RMSprop_0.001_30_200_100.json","jprso_RMSprop_0.001_50_50_500.json","jprso_RMSprop_0.001_50_200_200.json","jprso_RMSprop_0.001_30_500_200.json","jprso_RMSprop_0.001_30_100_200.json"] # os.listdir(directory)
+    # for file in files_in_directory:
+    #     print(file)
+    #     analyze_results(directory + "/" + file)
+    #plot_optimizer_sweep("results/jpsro_MWCCE")
+    reward_to_csv("results/jpsro_param")

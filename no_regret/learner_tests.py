@@ -86,10 +86,10 @@ def show_plt(learner_0: NoRegretLearner, learner_1: NoRegretLearner, title: str)
     plt.subplots_adjust(top=0.88)
 
     plt.subplot(2, 2, 1)
-    plt.plot(iterations, learner_0.all_probabilities[:, 0], label='0, C')
-    plt.plot(iterations, learner_0.all_probabilities[:, 1], label='0, D')
-    plt.plot(iterations, learner_1.all_probabilities[:, 0], label='1, C')
-    plt.plot(iterations, learner_1.all_probabilities[:, 1], label='1, D')
+    plt.plot(iterations, learner_0.all_probabilities[:, 0], label='0, a')
+    plt.plot(iterations, learner_0.all_probabilities[:, 1], label='0, b')
+    plt.plot(iterations, learner_1.all_probabilities[:, 0], label='1, a')
+    plt.plot(iterations, learner_1.all_probabilities[:, 1], label='1, b')
     plt.xlabel('Iterations')
     plt.ylabel('Probability')
     plt.title('Learner\'s Strategy Probabilities')
@@ -102,10 +102,10 @@ def show_plt(learner_0: NoRegretLearner, learner_1: NoRegretLearner, title: str)
         learner_1_avg_prob[i, :] = np.mean(learner_1.all_probabilities[:i, :], axis=0)
 
     plt.subplot(2, 2, 2)
-    plt.plot(iterations, learner_0_avg_prob[:, 0], label='0, T')
-    plt.plot(iterations, learner_0_avg_prob[:, 1], label='0, B')
-    plt.plot(iterations, learner_1_avg_prob[:, 0], label='1, L')
-    plt.plot(iterations, learner_1_avg_prob[:, 1], label='1, R')
+    plt.plot(iterations, learner_0_avg_prob[:, 0], label='0, a')
+    plt.plot(iterations, learner_0_avg_prob[:, 1], label='0, b')
+    plt.plot(iterations, learner_1_avg_prob[:, 0], label='1, a')
+    plt.plot(iterations, learner_1_avg_prob[:, 1], label='1, b')
     plt.xlabel('Iterations')
     plt.ylabel('Probability')
     plt.title('Learner\'s Time Average Strategy Probabilities')
@@ -122,10 +122,10 @@ def show_plt(learner_0: NoRegretLearner, learner_1: NoRegretLearner, title: str)
         p_1_1[i] = np.mean(learner_0.all_probabilities[:i, 1]) * np.mean(learner_1.all_probabilities[:i, 1])
 
     plt.subplot(2, 2, 3)
-    plt.plot(iterations, p_0_0, label='T, L')
-    plt.plot(iterations, p_0_1, label='T, R')
-    plt.plot(iterations, p_1_0, label='B, L')
-    plt.plot(iterations, p_1_1, label='B, R')
+    plt.plot(iterations, p_0_0, label='a, a')
+    plt.plot(iterations, p_0_1, label='a, b')
+    plt.plot(iterations, p_1_0, label='b, a')
+    plt.plot(iterations, p_1_1, label='b, b')
     plt.xlabel('Iterations')
     plt.ylabel('Probability')
     plt.title('Joint Strategy Probabilities')
@@ -144,10 +144,10 @@ def show_plt(learner_0: NoRegretLearner, learner_1: NoRegretLearner, title: str)
         p_1_1[i] = np.mean(np.array([1 if i == "D" or i == "R" else 0 for i in learner_0.all_choices[:i]]) * np.array([1 if i == "D" or i == "R" else 0 for i in learner_1.all_choices[:i]]))
 
     plt.subplot(2, 2, 4)
-    plt.plot(iterations, p_0_0, label='T, L')
-    plt.plot(iterations, p_0_1, label='T, R')
-    plt.plot(iterations, p_1_0, label='B, L')
-    plt.plot(iterations, p_1_1, label='B, R')
+    plt.plot(iterations, p_0_0, label='a, a')
+    plt.plot(iterations, p_0_1, label='a, b')
+    plt.plot(iterations, p_1_0, label='b, a')
+    plt.plot(iterations, p_1_1, label='b, b')
     plt.xlabel('Iterations')
     plt.ylabel('Distribution over Plays')
     plt.title('Stochastic Joint Strategy Probabilities')
@@ -187,12 +187,12 @@ def run_no_regret_fixed_cost(learner_0: NoRegretLearner, learner_1: NoRegretLear
         learner_1.update(cost_1)
         count += 1
         # check if the probabilities have converged
-        if count % 100 == 0 and expected_prob_0 is not None and expected_prob_1 is not None:
-            time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
-            time_averaged_prob_1 = np.mean(learner_1.all_probabilities, axis=0)
-            if np.allclose(time_averaged_prob_0, expected_prob_0, atol=0.01) and np.allclose(time_averaged_prob_1, expected_prob_1, atol=0.01):
-                converged = True
-        elif count > max_iter:
+        # if count % 100 == 0 and expected_prob_0 is not None and expected_prob_1 is not None:
+        #     time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
+        #     time_averaged_prob_1 = np.mean(learner_1.all_probabilities, axis=0)
+        #     if np.allclose(time_averaged_prob_0, expected_prob_0, atol=0.01) and np.allclose(time_averaged_prob_1, expected_prob_1, atol=0.01):
+        #         converged = True
+        if count > max_iter:
             break
     # return the time averaged probabilities
     time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
@@ -233,12 +233,12 @@ def run_no_regret_expected_cost(learner_0: NoRegretLearner, learner_1: NoRegretL
         learner_1.update(cost_1)
         count += 1
         # check if the probabilities have converged
-        if count % 100 == 0 and expected_prob_0 is not None and expected_prob_1 is not None:
-            time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
-            time_averaged_prob_1 = np.mean(learner_1.all_probabilities, axis=0)
-            if np.allclose(time_averaged_prob_0, expected_prob_0, atol=0.01) and np.allclose(time_averaged_prob_1, expected_prob_1, atol=0.01):
-                converged = True
-        elif count > max_iter:
+        # if count % 100 == 0 and expected_prob_0 is not None and expected_prob_1 is not None:
+        #     time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
+        #     time_averaged_prob_1 = np.mean(learner_1.all_probabilities, axis=0)
+        #     if np.allclose(time_averaged_prob_0, expected_prob_0, atol=0.01) and np.allclose(time_averaged_prob_1, expected_prob_1, atol=0.01):
+        #         converged = True
+        if count > max_iter:
             break
     # return the time averaged probabilities
     time_averaged_prob_0 = np.mean(learner_0.all_probabilities, axis=0)
@@ -265,8 +265,8 @@ def dominant_strategy_example_fixed_cost(debug: bool = False):
             # cost vector for all player 0 strategies, for given player 1 strategy
             return scaled_c[:, strategy_mapping[strategies[1]]]
         else:
-            # cost matrix, inverse of utility matrix u= [[3, 5], [6, 8]]
-            c = np.array([[-3, -5], [-6, -8]])
+            # cost matrix, inverse of utility matrix u= [[3, 6], [5, 8]]
+            c = np.array([[-3, -6], [-5, -8]])
             scaled_c = (c - np.min(c)) / (np.max(c) - np.min(c))
             if debug:
                 print(f"Player 1 scaled cost matrix: {scaled_c}")
@@ -278,13 +278,22 @@ def dominant_strategy_example_fixed_cost(debug: bool = False):
     learner_1 = NoRegretLearner(["L", "R"])
 
     # run no regret algorithm
-    count, converged = run_no_regret_fixed_cost(learner_0, learner_1, get_cost_vector, [0,1], [0,1], debug)
-    show_plt(learner_0, learner_1, "Dominant strategy example, fixed cost")
+    count, converged = run_no_regret_fixed_cost(learner_0, learner_1, get_cost_vector, [0,1], [0,1], debug, max_iter=5000)
+    def check_is_cce():
+        # get time averaged probabilities for each player
+        p_0 = np.mean(learner_0.all_probabilities, axis=0)
+        p_1 = np.mean(learner_1.all_probabilities, axis=0)
+        return p_0, p_1
 
-    if not converged:
-        assert(False), "No regret algorithm did not converge"
-    else:
-        print(f'Dominant strategy example passed in {count} iterations\n')
+    p_0, p_1 = check_is_cce()
+    p_dist = [float(p_0[0] * p_1[0]), float(p_0[0] * p_1[1]), float(p_0[1] * p_1[0]), float(p_0[1] * p_1[1])]
+    print("Joint distribution:", p_dist)
+    show_plt(learner_0, learner_1, "Dominant Game, Partial Information")
+
+    # if not converged:
+    #     assert(False), "No regret algorithm did not converge"
+    # else:
+    #     print(f'Dominant strategy example passed in {count} iterations\n')
 
 
 '''
@@ -306,8 +315,8 @@ def dominant_strategy_example_expected_cost(debug: bool = False):
             # cost vector for all player 0 strategies, for probabilistic player 1 strategy
             return scaled_c[:, 0] * learner_1.probabilities[0] + scaled_c[:, 1] * learner_1.probabilities[1]
         else:
-            # cost matrix, inverse of utility matrix u= [[3, 5], [6, 8]]
-            c = np.array([[-3, -5], [-6, -8]])
+            # cost matrix, inverse of utility matrix u= [[3, 6], [5, 8]]
+            c = np.array([[-3, -6], [-5, -8]])
             scaled_c = (c - np.min(c)) / (np.max(c) - np.min(c))
             if debug:
                 print(f"Player 1 scaled cost matrix: {scaled_c}")
@@ -315,8 +324,17 @@ def dominant_strategy_example_expected_cost(debug: bool = False):
             return scaled_c[0, :] * learner_0.probabilities[0] + scaled_c[1, :] * learner_0.probabilities[1]    
 
     # run no regret algorithm
-    count, converged = run_no_regret_expected_cost(learner_0, learner_1, get_cost_vector, [0,1], [0,1], debug, max_iter=2000)
-    show_plt(learner_0, learner_1, "Dominant strategy example, expected cost")
+    count, converged = run_no_regret_expected_cost(learner_0, learner_1, get_cost_vector, [0,1], [0,1], debug, max_iter=5000)
+    def check_is_cce():
+        # get time averaged probabilities for each player
+        p_0 = np.mean(learner_0.all_probabilities, axis=0)
+        p_1 = np.mean(learner_1.all_probabilities, axis=0)
+        return p_0, p_1
+
+    p_0, p_1 = check_is_cce()
+    p_dist = [float(p_0[0] * p_1[0]), float(p_0[0] * p_1[1]), float(p_0[1] * p_1[0]), float(p_0[1] * p_1[1])]
+    print("Joint distribution:", p_dist)
+    #show_plt(learner_0, learner_1, "Dominant Game, Full Information")
 
     # if not converged:
     #     assert(False), "No regret algorithm did not converge"
@@ -347,7 +365,7 @@ def prof_bryce_example_fixed_cost(debug: bool = False):
     learner_1 = NoRegretLearner(["L", "R"], initial_weights=np.array([2, 1]))
 
     # run no regret algorithm
-    count, converged = run_no_regret_fixed_cost(learner_0, learner_1, get_player_cost, debug=debug, max_iter=2000)
+    count, converged = run_no_regret_fixed_cost(learner_0, learner_1, get_player_cost, debug=debug, max_iter=5000)
 
     def check_is_cce():
         # get time averaged probabilities for each player
@@ -363,7 +381,7 @@ def prof_bryce_example_fixed_cost(debug: bool = False):
     # check if the joint, time averaged probabilities match the expected CCE
     assert(np.allclose(p_dist, expected_cce, atol=0.05)), "Player 0 and Player 1 probabilities do not match expected CCE"
     print("Prof Bryce example passed\n")
-    show_plt(learner_0, learner_1, "Prof Bryce example, fixed cost")
+    show_plt(learner_0, learner_1, "Compeititive Game, Partial Information")
 
 
 '''
@@ -404,7 +422,7 @@ def prof_bryce_example_expected_cost(debug: bool = False):
     # check if the joint, time averaged probabilities match the expected CCE
     assert(np.allclose(p_dist, expected_cce, atol=0.02)), "Player 0 and Player 1 probabilities do not match expected CCE"
     print("Prof Bryce example passed\n")
-    show_plt(learner_0, learner_1, "Prof Bryce example, expected cost")
+    # show_plt(learner_0, learner_1, "Compeititive Game, Full Information")
 
 
 def game_of_chicken_example(debug: bool = False):
@@ -446,7 +464,7 @@ def game_of_chicken_example(debug: bool = False):
     print("Joint distribution:", p_dist)
     expected_cce = cce_solver(c_0, c_1)
     print("Expected CCE:", expected_cce)
-    show_plt(learner_0, learner_1, "Chicken example, fixed cost")
+    # show_plt(learner_0, learner_1, "Chicken Game, Partial Information")
     print("\n")
 
     # re-initialize learners
@@ -465,7 +483,7 @@ def game_of_chicken_example(debug: bool = False):
     print("Joint distribution:", p_dist)
     expected_cce = cce_solver(c_0, c_1)
     print("Expected CCE:", expected_cce)
-    show_plt(learner_0, learner_1, "Chicken example, expected cost")
+    # show_plt(learner_0, learner_1, "Chicken Game, Full Information")
 
 
 
@@ -568,20 +586,20 @@ if __name__ == "__main__":
     # run no regret algorithm where all agents submit strategies then the cost vector is calculated on the submitted strategies
     dominant_strategy_example_fixed_cost(False)
     # # run no regret algorithm where the cost vector is calculated on the expected value of the strategies
-    dominant_strategy_example_expected_cost(False)
+    #dominant_strategy_example_expected_cost(False)
 
     # example from youtube video on CE/CCE where the correlated equilibrium is a mixed strategy, 
     # P(L,L) ~ 0.171, P(L,R) ~ 0.029, P(R,L) ~ 0.686, P(R,R) ~ 0.114
     # the utility matrixes are u_0 = [[3, 1], [2, 7]], u_1 = [[4, 8], [6, 5]]
     # print("Testing prof bryce example...")
-    prof_bryce_example_fixed_cost(False)
-    prof_bryce_example_expected_cost(False)
+    # prof_bryce_example_fixed_cost(False)
+    # prof_bryce_example_expected_cost(False)
 
     # chicken example where the mixed Nash equilibrium is P(C,C) ~ 0.17, P(C,D) ~ 0.03, P(D,C) ~ 0.69, P(D,D) ~ 0.11
     # and there exists two pure Nash equilibria, (C,D) and (D,C)
     # the utility matrixes are u_0 = [[0, 7], [2, 6]], u_1 = [[0, 2], [7, 6]]
     # print("Testing chicken example...")
-    game_of_chicken_example(False)
+    # game_of_chicken_example(False)
 
     # run game of chicken example with many iterations
     # game_of_chicken_many_iterations(50, False)

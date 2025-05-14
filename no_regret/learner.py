@@ -30,7 +30,7 @@ class NoRegretLearner:
     '''
     Update the weights of the strategies based on the cost vector.
     '''
-    def update(self, cost_vector, eta=0.04):
+    def update(self, cost_vector, eta=0.1):
         # Update weights using the multiplicative weights algorithm
         self.weights = self.weights * (1-eta) ** cost_vector
         if np.any(self.weights < 1e-100):

@@ -28,7 +28,7 @@ def dominant_strategy_example(Correlated_equilibrium, debug: bool = False):
     def get_player_utility(player: str) -> Callable[[Dict[str, str]], float]:
         other_player = "P1" if player == "P2" else "P1"
         strategy_mapping = {"L": 0, "R": 1}
-        u = [[3, 1], [5, 7]] if player == "P1" else [[3, 5], [6, 8]]
+        u = [[3, 1], [5, 7]] if player == "P1" else [[3, 6], [5, 8]]
         def player_utility(profile: Dict[str, str]) -> float:
             return u[strategy_mapping[profile["P1"]]][strategy_mapping[profile["P2"]]]
         return player_utility
@@ -53,7 +53,7 @@ def prof_bryce_example(Correlated_equilibrium, debug: bool = False):
     def get_player_utility(player: str) -> Callable[[Dict[str, str]], float]:
         other_player = "P1" if player == "P2" else "P1"
         strategy_mapping = {"L": 0, "R": 1}
-        u = [[3, 1], [2, 7]] if player == "P1" else [[4, 8], [6, 5]]
+        u = [[3, 1], [2, 7]] if player == "P1" else [[4, 8], [6, 5]] #1/6, 4 
         def player_utility(profile: Dict[str, str]) -> float:
             return u[strategy_mapping[profile["P1"]]][strategy_mapping[profile["P2"]]]
         return player_utility
@@ -218,7 +218,7 @@ def test_strategy_enumeration_fast(Correlated_equilibrium,debug: bool = False):
 
 def dominant_strategy_example_fast(Correlated_equilibrium, debug: bool = False): 
     def get_player_utility(player: str) -> Callable[[Dict[str, str]], float]:
-        return [[3, 1], [5, 7]] if player == "P1" else [[3, 5], [6, 8]]
+        return [[3, 1], [5, 7]] if player == "P1" else [[3, 6], [5, 8]]
 
     ce = ce_fast(["L", "R"], debug)
     ce.add_player("P1", get_player_utility("P1"))

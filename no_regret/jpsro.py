@@ -98,7 +98,7 @@ class BidTradingEnv(dubey.DubeyGame):
         safe_allocations = tf.maximum(allocations, epsilon)
         expanded_alphas = tf.expand_dims(self.alphas, axis=0)
         tiled_alphas = tf.tile(expanded_alphas, multiples=[tf.shape(allocations)[0], 1, 1])
-        utilities = tf.reduce_sum(safe_allocations ** tiled_alphas, axis=2) + 0.5 * tf.minimum(0, net_credit)
+        utilities = tf.reduce_prod(safe_allocations ** tiled_alphas, axis=2) + 0.5 * tf.minimum(0, net_credit)
         return utilities
 
     def evaluate_policy_tuple(self, policies):
@@ -106,7 +106,7 @@ class BidTradingEnv(dubey.DubeyGame):
         return rewards
     
     def create_basic_policy(self, player_idx):
-        base_strat = [np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2, np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 2]
+        base_strat = [np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 1.5, np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 1.5]
         return tf.convert_to_tensor(base_strat, dtype=tf.float32)
     
 # === Policy Representation === maybe change this to a more concrete model
@@ -236,7 +236,8 @@ def solve_cce(meta_game, num_players, policy_sets):
     sigma = cp.Variable(num_strats)
     # Objective: Maximize entropy (or minimize negative entropy proxy) for a less extreme CCE
     # Using a simple quadratic form (-0.5 * ||sigma||^2) encourages smoother distributions
-    objective = cp.Maximize(cp.sum(joint_payoffs.T @ sigma))
+    objective = cp.Maximize(cp.sum(joint_payoffs.T @ sigma)) # MWCCE
+    # objective = cp.Maximize(-0.5 * cp.sum_squares(sigma)) # MGCCE
     constraints = [cp.sum(sigma) == 1, sigma >= 0]
 
     for p in range(num_players):
@@ -303,6 +304,25 @@ def solve_cce(meta_game, num_players, policy_sets):
 
     return [(joint_strats[i], sigma_value[i]) for i in range(len(joint_strats))]
 
+def prune_strategies(policy_sets, sigma):
+    # Remove strategies that are not played with positive probability
+    policy_counts = [[0 for _ in range(len(policy_sets[p]))] for p in range(len(policy_sets))]
+    for joint_strat, prob in sigma:
+        for i, pi in enumerate(joint_strat):
+            for j, strat in enumerate(policy_sets[i]):
+                if np.all(pi == strat):
+                    policy_counts[i][j] += prob
+    new_policy_sets = []
+    for p in range(len(policy_sets)):
+        new_player_policies = []
+        for i, pi in enumerate(policy_sets[p]):
+            if policy_counts[p][i] > 1e-6:
+                new_player_policies.append(pi)
+            else: 
+                print(f"Player {p} policy {i} has zero probability. Removing.")
+        new_policy_sets.append(new_player_policies)
+    return new_policy_sets
+
 def jprso(env: BidTradingEnv, debug = False, log_file = None):
     num_players = env.num_players
     policy_sets = [[env.create_basic_policy(p)] for p in range(num_players)]
@@ -317,7 +337,7 @@ def jprso(env: BidTradingEnv, debug = False, log_file = None):
     elif log_file:
         with open(log_file, "a") as f:
             f.write("Initial Configuration:\n")
-            policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
+            policy_sets_str = np.array2string(np.array(policy_sets))
             f.write(f"policy_sets: {policy_sets_str}\n")
             meta_game_str = np.array2string(tf.convert_to_tensor([payoff for i, [joint, payoff] in enumerate(meta_game)]).numpy())
             f.write(f"meta_game: {meta_game_str}\n")
@@ -342,12 +362,14 @@ def jprso(env: BidTradingEnv, debug = False, log_file = None):
 
         meta_game = build_meta_game(env, policy_sets)
         sigma = solve_cce(meta_game, num_players, policy_sets)
+        if epoch % 5 == 0:
+            policy_sets = prune_strategies(policy_sets, sigma)
 
         if not debug and log_file:
             with open(log_file, "a") as f:
                 f.write("--------------------------------\n")
                 f.write(f"End of epoch {epoch}:\n")
-                policy_sets_str = np.array2string(tf.convert_to_tensor(policy_sets).numpy())
+                policy_sets_str = np.array2string(np.array(policy_sets))
                 f.write(f"policy_sets: {policy_sets_str}\n")
                 meta_game_str = np.array2string(tf.convert_to_tensor([payoff for i, [joint, payoff] in enumerate(meta_game)]).numpy())
                 f.write(f"meta_game: {meta_game_str}\n")
@@ -381,13 +403,13 @@ def run_training(debug = False, log_file = None):
 
 if __name__ == "__main__":
     #run_training(debug = False, log_file = None)
-    optimizers = [[tf.keras.optimizers.RMSprop, "RMSprop"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.SGD, "SGD"]]
-    learning_rates = [0.001, 0.01, 0.05, 0.1, 1]
+    optimizers = [[tf.keras.optimizers.RMSprop, "RMSprop"]]#, [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.SGD, "SGD"]]
+    learning_rates = [0.005]#[0.001, 0.005]
 
     # Vary these after finding the best optimizer
-    max_epochs = [5, 10, 20, 30]
-    best_response_epochs = [10, 50, 100, 200, 500]
-    best_response_samples = [10, 100, 200, 500, 1000]
+    max_epochs = [30, 50] #[10, 20, 30, 50]
+    best_response_epochs = [50, 100, 200, 500]
+    best_response_samples = [100, 200, 500, 1000]
 
     log_prefix = f"jpsro_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
     os.makedirs(f"logs/{log_prefix}", exist_ok=True)
@@ -404,15 +426,23 @@ if __name__ == "__main__":
             PARAM_DICT["solver"] = optimizer
             PARAM_DICT["solver_name"] = optimizer_name
             PARAM_DICT["learning_rate"] = learning_rate
-            
-            optimizer_name = PARAM_DICT["solver_name"]
-            learning_rate = PARAM_DICT["learning_rate"]
-            # Add parentheses around the entire conditional expression
-            log_filename = f"jprso_{(optimizer_name + '_amsgrad' if PARAM_DICT['amsgrad'] and optimizer_name == 'Adam' else optimizer_name)}_{learning_rate}_{PARAM_DICT['max_epochs']}_{PARAM_DICT['best_response_epochs']}_{PARAM_DICT['best_response_samples']}"
-            sigma = run_training(debug = False, log_file = f"logs/{log_prefix}{log_filename}.txt")
-            sigma_processed = [[[strat.numpy().tolist() for strat in joint], prob] for joint, prob in sigma]
-            with open(f"results/{log_prefix}{log_filename}.json", "a") as f:
-                f.write(f"{json.dumps(sigma_processed)}\n")
+            for max_epoch in max_epochs:
+                PARAM_DICT["max_epochs"] = max_epoch
+                for best_response_epoch in best_response_epochs:
+                    PARAM_DICT["best_response_epochs"] = best_response_epoch
+                    for best_response_sample in best_response_samples:
+                        PARAM_DICT["best_response_samples"] = best_response_sample
+                        if max_epoch == 30 and best_response_epoch < 500:
+                            continue
+                        
+                        optimizer_name = PARAM_DICT["solver_name"]
+                        learning_rate = PARAM_DICT["learning_rate"]
+                        # Add parentheses around the entire conditional expression
+                        log_filename = f"jprso_{(optimizer_name + '_amsgrad' if PARAM_DICT['amsgrad'] and optimizer_name == 'Adam' else optimizer_name)}_{learning_rate}_{PARAM_DICT['max_epochs']}_{PARAM_DICT['best_response_epochs']}_{PARAM_DICT['best_response_samples']}"
+                        sigma = run_training(debug = False, log_file = f"logs/{log_prefix}{log_filename}.txt")
+                        sigma_processed = [[[strat.numpy().tolist() for strat in joint], prob] for joint, prob in sigma]
+                        with open(f"results/{log_prefix}{log_filename}.json", "a") as f:
+                            f.write(f"{json.dumps(sigma_processed)}\n")
 
                     
 
