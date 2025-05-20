@@ -3,6 +3,11 @@ from oracle import NNOracle
 import numpy as np
 import tensorflow as tf
 
+'''
+    Test for the DubeyGame to ensure that the trade function is computed correctly.
+    Also tests the supervised learning oracle to ensure that the optimal strategies are computed correctly.
+'''
+
 def get_strategy_vector(context, strategy1, strategy2):
     flat_strategy1 = strategy1.as_flat_array()
     flat_strategy2 = strategy2.as_flat_array()

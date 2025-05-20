@@ -6,6 +6,14 @@ from scipy.optimize import linprog
 import random
 
 '''
+    This file contains the tests for the correlated equilibrium no-regret algorithm. It includes tests for the strategy enumeration, 
+    the dominant strategy example, the prof bryce example, the game of chicken example, the three player game with dominant strategy, 
+    and the three player game with mixed equilibria. For each game, it computes the full information CE and the partial information CE. 
+    It also includes tests for the fast version of the correlated equilibrium algorithm. All of the tests are described in the thesis paper,
+    and results are plotted during the test.
+'''
+
+'''
 This function checks if the given probabilities of each player playing actions 0,1 for a 
 two player, bimatrix game of two actions comprise a CCE. It checks this by comparing the 
 incentive constraints of the players, i.e. do they have an incentive to play a fixed strategy 

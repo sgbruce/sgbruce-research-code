@@ -3,6 +3,12 @@ from dubey_regret import DubeyGame, DubeyPlayer, Strategy
 import numpy as np
 from gekko import GEKKO
 
+'''
+    This file generates labeled data to use for supervised learning approaches.
+    It coputes the optimal trading strategies for a given set of endowments and preferences 
+    using nonlinear optimization.
+'''
+
 def get_competitive_solution_linear(endowments, preferences, debug=False):
     m = GEKKO(remote=False)
 
@@ -97,121 +103,6 @@ def gen_training_data():
     with open('training_data_2_2_cobb.json', 'a') as f:
         f.write(']')
     
-    # game.add_player(DubeyPlayer(0, [1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_3_2.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-    
-    # game.add_player(DubeyPlayer(0, [1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_4_2.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-
-    # game = DubeyGame(num_goods=3)
-    # game.add_player(DubeyPlayer(0, [1, 1, 1]))
-    # game.add_player(DubeyPlayer(0, [1, 1, 1]))
-    # game.add_player(DubeyPlayer(0, [1, 1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_3_3.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-
-    # game.add_player(DubeyPlayer(0, [1, 1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_4_3.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-    
-    # game.add_player(DubeyPlayer(0, [1, 1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_5_3.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-    
-    # game = DubeyGame(num_goods=4)
-    # game.add_player(DubeyPlayer(0, [1, 1, 1, 1]))
-    # game.add_player(DubeyPlayer(0, [1, 1, 1, 1]))
-    # game.add_player(DubeyPlayer(0, [1, 1, 1, 1]))
-    # game.add_player(DubeyPlayer(0, [1, 1, 1, 1]))
-    # iter = 0
-    # while True:
-    #     try:
-    #         context, optimal_strategies = get_training_data(game)
-    #         datapoint = [context.tolist(), [[list(s.buy_price), list(s.buy_quantity), list(s.sell_price), list(s.sell_quantity)] for s in optimal_strategies]]
-    #         # print(datapoint)
-    #         with open('training_data_4_4.json', 'a') as f:
-    #             json.dump(datapoint, f)
-    #             f.write(',\n')
-    #     except Exception as e:
-    #         print(e)
-    #     iter += 1
-    #     if iter % 500 == 0:
-    #         print(iter)
-    #     if iter > 10000:
-    #         break
-
 if __name__ == "__main__":
     print(get_competitive_solution_cobb([[4,4],[4,4]], [[0.75, 0.25], [0.25, 0.75]]))
     # gen_training_data()

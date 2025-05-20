@@ -2,7 +2,7 @@
 This file contains the oracle for the continuous Dubey game.
 The file contains the regression oracle as well as the sampling oracle.
 
-The simplified regression oracle is a full information, determinstic oracle, 
+The neural network regression oracle is a full information, determinstic oracle, 
 meaning that instead of an online algorithm, it is a batch algorithm that 
 receives all the limit orders at once and then computes the true outcome. 
 
@@ -26,19 +26,10 @@ OVERSOLD_PENALTY = 10000
 EXCESS_BID_PENALTY = 0.1
 MSE_SCALE = 1
 
-class SimpleOracle:
-    def __init__(self, game: DubeyGame): # BUILD A NN THAT, GIVEN ENDOWMENTS AND UTILTIES, FINDS OPTIMAL BIDS
-        # CAN I MAKE INPUTS THAT HAVE A KNOWN MAX TOTAL WELFARE? THEN RANDOMIZE THE STARTING ALLOCATIONS, 
-        # AND SEE IF THE NN CAN FIND THE TRADES TO INDUCED THAT MAX WELFARE?
-        self.game = game
-
-    def get_optimal_strategy(self, player_index, other_strategies):
-        pass
-
-    def get_true_outcome(self, strategies):
-        pass
-
 class NNOracle:
+    '''
+        initializes the neural network oracle given a DubeyGame instance
+    '''
     def __init__(self, game: DubeyGame):
         self.game = game
         self.num_inputs = 2 * self.game.num_goods * len(self.game.players)
@@ -59,6 +50,9 @@ class NNOracle:
         combined_output = keras.layers.Concatenate()([input_layer, output_layer])
         self.nn = keras.Model(inputs=input_layer, outputs=combined_output)
     
+    '''
+        get the training data from the json file, labeled data is generated in datagen.py
+    '''
     def get_training_data(self):
         print("reading training data")
         training_data_file = f"training_data_{len(self.game.players)}_{self.game.num_goods}_cobb.json"
@@ -75,7 +69,10 @@ class NNOracle:
         training_data_y = np.array(np.concatenate(training_data_y)).reshape(-1, self.num_outputs)
         training_data_y = np.concatenate([training_data_x, training_data_y], axis=1)
         return training_data_x, training_data_y
-    
+
+    '''
+        get the custom loss function for the neural network
+    '''    
     def get_custom_loss(self, debug = False):
         num_players = len(self.game.players)
         num_goods = self.game.num_goods
@@ -146,6 +143,9 @@ class NNOracle:
             return mean_loss
         return custom_loss
     
+    '''
+        Same as get_custom_loss, but vectorized for efficiency to handle large batch sizes
+    '''
     def get_custom_loss_vectorized(self, debug = False):
         num_players = len(self.game.players)
         num_goods = self.game.num_goods
@@ -196,12 +196,9 @@ class NNOracle:
             return tf.reduce_mean(total_loss)
         return custom_loss_vectorized
 
-            
-    
-    # Convert to Strategy objects if needed, or use TensorFlow operations
-                # true_bids = [Tensor_Strategy(true_bids[i][0], true_bids[i][1], true_bids[i][2], true_bids[i][3]) for i in range(num_players)]
-                # pred_bids = [Tensor_Strategy(pred_bids[i][0], pred_bids[i][1], pred_bids[i][2], pred_bids[i][3]) for i in range(num_players)]
-
+    '''
+        Train the neural network using the custom loss function and training data
+    '''
     def train_nn(self, reduced = False):
         # get the training context and optimal market value
         training_data_x, training_data_y = self.get_training_data()
@@ -220,6 +217,9 @@ class NNOracle:
         epochs = 5 if reduced else 20
         self.nn.fit(train_x, train_y, epochs=epochs, batch_size=16, validation_data=(val_x, val_y))
 
+    '''
+        Train the neural network using the mean squared error loss function
+    '''
     def train_nn_no_custom_loss(self, reduced = False):
         # get the training context and optimal market value
         training_data_x, training_data_y = self.get_training_data()

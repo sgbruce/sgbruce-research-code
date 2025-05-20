@@ -9,4 +9,6 @@ no_regret/training_data_*.json
 no_regret/oracle_log_*.txt
 no_regret/logs/*
 no_regret/results/*
+no_regret/*.csv
+no_regret/*.json
 *.h5

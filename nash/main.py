@@ -2,8 +2,6 @@ import random
 import numpy as np
 from scipy.optimize import linprog
 EPS = 1e-5
-# Reference notes for this code can be found at https://www.notion.so/Summer-2024-Notes-b6100cca39664b20b6f53d51b847e80c?pvs=4
-###
 
 def format_boundary_conditions(boundary_conditions):
     return "\n".join(map(lambda y: str([[f"{z['x']:.3f}", f"{z['y']:.3f}"] for z in y]), boundary_conditions))

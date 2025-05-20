@@ -2,6 +2,13 @@ from ce_basic import Correlated_equilibrium as ce_basic
 from ce_fast import Correlated_equilibrium as ce_fast
 from typing import Dict, Callable
 
+'''
+    This file contains the tests for the correlated equilibrium algorithm. It includes tests for the strategy enumeration, 
+    the dominant strategy example, the prof bryce example, the game of chicken example, the three player game with dominant strategy, 
+    and the three player game with mixed equilibria. For each game, it assumes linear programming maximizing total welfare in 
+    expectation, and then tests the results against the expected results.
+'''
+
 def test_strategy_enumeration(Correlated_equilibrium,debug: bool = False):
     ce = Correlated_equilibrium(["a", "b", "c"])
     ce.add_player("1", lambda x: x)

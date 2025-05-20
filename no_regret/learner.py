@@ -2,6 +2,10 @@ import numpy as np
 from dubey_regret import Strategy
 import random
 
+'''
+    Simple no-regret learner implementation, uses the multiplicative weights algorithm.
+'''
+
 class NoRegretLearner:
     '''
     A class to represent a learner in a no regret algorithm.

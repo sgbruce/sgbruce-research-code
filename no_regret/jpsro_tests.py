@@ -6,6 +6,10 @@ import csv
 import matplotlib.pyplot as plt
 from jpsro import BidTradingEnv, solve_cce
 
+'''
+    This file contains the tests for the JPSRO algorithm.
+'''
+
 # This prevents NumPy from truncating large arrays with '...'
 np.set_printoptions(threshold=np.inf, precision=4, suppress=True)
 
@@ -62,6 +66,10 @@ def test_solver():
 
     print("Prof Bryce example passed")
 
+
+'''
+    This function takes in a results file and prints the stats for the results.
+'''
 def get_file_stats(file: str):
     num_players = 2
     num_goods = 2
@@ -104,6 +112,7 @@ def get_file_stats(file: str):
             "max_prob_result": max_prob_result, "all_max_prob_results": all_max_prob_results, \
             "num_strats": len(results), "num_nonzero_strats": len(nonzero_results), \
             "num_significant_strats": len(significant_results), "num_all_max_prob_strats": len(all_max_prob_results)}
+
 '''
 Analyze the results of a JPSRO training run. takes in a results file which is expected 
 to be in the format of the results file from the JPSRO training run: a json file with a 
@@ -248,10 +257,14 @@ def analyze_results(res_file: str):
     axs[2].set_ylabel('Cumulative Probability')
     axs[2].grid(True)
 
-    plt.suptitle(f'Cumulative Distribution Functions of Outcomes\n{file.split(".js")[0]}')
+    plt.suptitle(f'Cumulative Distribution Functions of Outcomes\n{res_file.split(".js")[0]}')
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
+
+'''
+    This function plots the average reward vs. learning rate for a given directory.
+'''
 def plot_optimizer_sweep(directory: str):
     files_in_directory = os.listdir(directory)
     file_map = []
@@ -296,6 +309,9 @@ def plot_optimizer_sweep(directory: str):
     plt.grid(True)
     plt.show()
 
+'''
+    This function plots the average reward vs. max epochs for a given directory.
+'''
 def plot_parameter_sweep(directory: str):
     files_in_directory = os.listdir(directory)
     file_map = []
@@ -347,6 +363,9 @@ def plot_parameter_sweep(directory: str):
     plt.grid(True)
     plt.show()
 
+'''
+    This function writes the stats for a given directory to a csv file.
+'''
 def reward_to_csv(directory: str):
     files_in_directory = os.listdir(directory)
     file_map = []
@@ -400,7 +419,7 @@ def reward_to_csv(directory: str):
 
 
 if __name__ == "__main__":
-    # test_env()
+    test_env()
     # test_solver()
     # directory = "results/jpsro_param"
     # files_in_directory = ["jprso_RMSprop_0.001_30_200_100.json","jprso_RMSprop_0.001_50_50_500.json","jprso_RMSprop_0.001_50_200_200.json","jprso_RMSprop_0.001_30_500_200.json","jprso_RMSprop_0.001_30_100_200.json"] # os.listdir(directory)
@@ -408,4 +427,4 @@ if __name__ == "__main__":
     #     print(file)
     #     analyze_results(directory + "/" + file)
     #plot_optimizer_sweep("results/jpsro_MWCCE")
-    reward_to_csv("results/jpsro_param")
+    # reward_to_csv("results/jpsro_param")

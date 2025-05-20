@@ -13,18 +13,39 @@ import dubey_regret as dubey
 # This prevents NumPy from truncating large arrays with '...'
 np.set_printoptions(threshold=np.inf, precision=4, suppress=True)
 
+'''
+    This dictionary contains the parameters for the JPSRO algorithm. Currently 
+    it operates the algorithm for max_epochs iterations, pruning the strategy set
+    every pruning_parameter epochs. For the BR operator, it samples
+    best_response_samples joint strategies from the meta-game and optimizes the
+    BR for that many joint strategies. It then runs the BR for best_response_epochs
+    epochs, using the optimizer specified by solver and learning_rate.
+'''
 PARAM_DICT = {
-    "solver_name": "Adam",
-    "solver": tf.keras.optimizers.Adam,
+    "solver_name": "RMSProp",
+    "solver": tf.keras.optimizers.RMSprop,
     "amsgrad": True,
-    "learning_rate": 0.05,
-    "max_epochs": 15,
-    "best_response_epochs": 100,
-    "best_response_samples": 200,
+    "learning_rate": 0.001,
+    "max_epochs": 25,
+    "best_response_epochs": 200,
+    "best_response_samples": 500,
+    "pruning_parameter": 4
 }
 
-# === Custom Trading Environment ===
+'''
+    This class is a custom trading environment that inherits from the DubeyGame class.
+    It is used to compute the trading amounts for a set of bids, and the utilities a player 
+    recieves given said bids, endowments, and cobb-douglas exponents.
+
+    It is specificed for a single market state E, and is initialized with a list of endowments of size 
+    (num_players, num_goods), and a list of cobb-douglas exponents of size (num_players, num_goods), 
+    such that for exponents x,y and goods a,b, a player's utility is given a^x * b^y - beta, 
+    where beta is the net credit after trade if negative. 
+'''
 class BidTradingEnv(dubey.DubeyGame):
+    '''
+    Initialize the market environment E with a list of endowments and a list of cobb-douglas exponents.
+    '''
     def __init__(self, endowments, cobb_douglas_exponents):
         super().__init__(len(endowments[0]))
         self.num_goods = len(endowments[0])
@@ -33,12 +54,32 @@ class BidTradingEnv(dubey.DubeyGame):
         self.alphas = tf.convert_to_tensor(cobb_douglas_exponents, dtype=tf.float32)  # list of shape (num_players, num_goods)
         self.reset()
 
+    '''
+        Reset the market environment E to the initial state, for now is just a dummy.
+        If you want to implement a dynamic market state over time, you can do so here.
+    '''
     def reset(self):
         return np.zeros((len(self.endowments), self.num_goods))  # placeholder obs
+    
+    '''
+        Given a list of bids, compute the trading amounts, and the utilities a player recieves.
+        Returns the tuple (next state, rewards, done, info).
 
+        next state here is none, since the environment is static. If you want to implement a dynamic market state,
+        you can do so here.
+
+        rewards is a tensor of shape (num_players,) containing the utility each player recieves after the trade.
+
+        done is a boolean indicating if the episode is over (always true in static case).
+
+        info is a dictionary containing additional information about the trade. Here we include 
+        the actual executed bids (quantities and prices traded), the allocations of goods to players,
+        a boolean tensor of shape (num_players,) indicating if the bid was valid, and the net credit
+        of each player.
+    '''
     def step(self, bids: tf.Tensor, debug = False):
         # bids = list of (buy_price, buy_qty, sell_price, sell_qty) * num_goods per agent
-        executed_bids = self.compute_trade_amounts(bids)
+        executed_bids = self.compute_trade_amounts(bids) # compute the executed bids using the DubeyGame class
         endowments = tf.cast(self.endowments, dtype=tf.float32)
         # build allocations as purchase amount + endowment - sell amount
         bought_prices = tf.squeeze(executed_bids[:, 0, :]) # Shape: (num_players, num_goods)
@@ -52,15 +93,23 @@ class BidTradingEnv(dubey.DubeyGame):
 
         rewards = self.compute_utilities(allocations, net_credit)
 
+        # check if bids are valid (non-negative and selling no more than owned)
         sell_quantities = tf.squeeze(bids[:, 3, :])
         valid_bids = tf.logical_and(tf.reduce_all(bids >= 0, axis=(1, 2)), tf.reduce_all(endowments - sell_quantities >= 0, axis=1))
         valid_bids = tf.cast(valid_bids, tf.bool)
 
         return None, rewards, True, {"executed_bids": executed_bids, "allocations": allocations, "valid_bids": valid_bids, "net_credit": net_credit}
     
+
+    '''
+        Vector step does the same computation as step, but for a batch of bids. The outputs are as above,
+        however each returned tensor has an added dimension at axis 0, corresponding to the batch size.
+
+        Processing the bids in batches allows for parallel processing, and is more efficient for many sets of bids.
+    '''
     def vector_step(self, bids, debug = False):
         # bids = list of (buy_price, buy_qty, sell_price, sell_qty) * num_goods per agent
-        executed_bids = self.compute_trade_amounts_vectorized(bids)
+        executed_bids = self.compute_trade_amounts_vectorized(bids) # compute the trade amounts in batch form, using the DubeyGame class
         if debug:
             executed_bids = tf.debugging.check_numerics(executed_bids, "NaN/Inf in executed_bids") # Add check
         
@@ -79,18 +128,26 @@ class BidTradingEnv(dubey.DubeyGame):
         if debug:
             rewards = tf.debugging.check_numerics(rewards, "NaN/Inf in rewards") # Add check
 
+        # check if bids are valid (non-negative and selling no more than owned)
         sell_quantities = tf.squeeze(bids[:, :, 3, :])
         valid_bids = tf.logical_and(tf.reduce_all(bids >= 0, axis=(2, 3)), tf.reduce_all(endowments - sell_quantities >= 0, axis=2))
         valid_bids = tf.cast(valid_bids, tf.bool)
 
         return None, rewards, True, {"executed_bids": executed_bids, "allocations": allocations, "valid_bids": valid_bids, "net_credit": net_credit}
 
+    '''
+        Compute the utilities for a given set of allocations and net credit. Uses the cobb-douglass 
+        exponents to compute the base utility for each player.
+    '''
     def compute_utilities(self, allocations, net_credit):
         # allocations is a tensor of shape (num_players, num_goods)
         # net_credit is a tensor of shape (num_players,)
         utilities = tf.reduce_prod(allocations ** self.alphas, axis=1) + 0.5 * tf.minimum(0, net_credit)
         return utilities
     
+    '''
+        Vectorized version of compute_utilities. Computes the utilities for a batch of allocations and net credit.
+    '''
     def compute_utilities_vectorized(self, allocations, net_credit):
         # allocations is a tensor of shape (batch_size, num_players, num_goods)
         # net_credit is a tensor of shape (batch_size, num_players)
@@ -101,55 +158,29 @@ class BidTradingEnv(dubey.DubeyGame):
         utilities = tf.reduce_prod(safe_allocations ** tiled_alphas, axis=2) + 0.5 * tf.minimum(0, net_credit)
         return utilities
 
+    '''
+        Evaluate the utilities for a given joint strategy tuple and returns net utilities for each player.
+    '''
     def evaluate_policy_tuple(self, policies):
         _, rewards, _, _ = self.step(tf.convert_to_tensor(policies, dtype=tf.float32))
         return rewards
-    
+
+    '''
+        Create a basic policy for a given player index. This is a random policy that is used to initialize the policy set.
+    '''    
     def create_basic_policy(self, player_idx):
         base_strat = [np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 1.5, np.random.uniform(0, 1, [2]), self.endowments[player_idx] / 1.5]
         return tf.convert_to_tensor(base_strat, dtype=tf.float32)
     
-# === Policy Representation === maybe change this to a more concrete model
-class NNPolicy():
-    def __init__(self, obs_dim, act_dim):
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Input(shape=(obs_dim,)),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(act_dim)
-        ])
-        self.trainable_variables = self.model.trainable_variables
 
-    def __call__(self, obs):
-        return self.model(obs)
+'''
+    Train the best response for a given player index. This is done by sampling a set of joint strategies from the joint distribution,
+    and then optimizing a single player's bid for the given player index.
 
-def create_policy_model_nn(obs_dim, act_dim):
-    return NNPolicy(obs_dim, act_dim)
-
-
-
-# === Train Best Response ===
-def train_best_response_nn(env: BidTradingEnv, policy_set_opponents, joint_distribution,player_idx, obs_dim, act_dim):
-    br_policy = create_policy_model_nn(obs_dim, act_dim)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-    
-    for epoch in range(50):
-        obs = env.reset()
-        done = False
-        while not done:
-            with tf.GradientTape() as tape:
-                logits = br_policy(tf.convert_to_tensor([obs[player_idx]], dtype=tf.float32))
-                action = tf.squeeze(logits).numpy()
-                actions = []
-                for i, pi in enumerate(policy_set_opponents):
-                    actions.append(tf.squeeze(pi(obs[i:i+1])).numpy() if i != player_idx else action)
-                _, rewards, done, _ = env.step(actions)
-                loss = -rewards[player_idx]  # maximize own utility
-            grads = tape.gradient(loss, br_policy.trainable_variables)
-            optimizer.apply_gradients(zip(grads, br_policy.trainable_variables))
-    return br_policy
-
+    optimizing is done using a simple gradient descent optimizer. Parameters for the optimizer are specified in PARAM_DICT.
+'''
 def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endowment, debug = False):
+    # sample a strategy with p according to the joint distribution
     def sample_joint_strategy(joint_distribution):
         keys = [joint_distribution[i][0] for i in range(len(joint_distribution))]
         probabilities = [joint_distribution[i][1] for i in range(len(joint_distribution))]
@@ -167,9 +198,10 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     if debug:
         print("opponent_samples generated: ", len(opponent_samples))
     
-    # Step 2: Optimize agent's bid
+    # Step 2: Intialize agent's bid
     agent_bid = tf.Variable(tf.random.uniform([4, 2], maxval=[[1, 1], endowment, [1, 1], endowment]), dtype=tf.float32)
 
+    # Step 3: Optimize agent's bid
     if PARAM_DICT["solver_name"] == "Adam":
         optimizer = PARAM_DICT["solver"](learning_rate=PARAM_DICT["learning_rate"], amsgrad=PARAM_DICT["amsgrad"])
     else:
@@ -178,15 +210,14 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     for epoch in range(PARAM_DICT["best_response_epochs"]):  # optimization steps
         with tf.GradientTape() as tape:
             total = 0
-            # for opp_bids in opponent_samples:
-            #     all_bids = tf.concat([opp_bids[:player_idx], tf.convert_to_tensor([agent_bid], dtype=tf.float32), opp_bids[player_idx:]], axis=0)
-            #     _, utils, _, info = env.step(all_bids) # takes ~0.01s
-            #     total += utils[player_idx]
+            # turn bids into batches so all joint strategies are processed in parallel
             agent_bid_expanded = tf.expand_dims(tf.expand_dims(agent_bid, axis=0), axis=0)
             batched_bids = tf.tile(agent_bid_expanded, multiples=[opponent_samples.shape[0], 1, 1, 1])
             all_bids = tf.concat([opponent_samples[:, :player_idx], batched_bids, opponent_samples[:, player_idx:]], axis=1)
+            # compute the utilities of the bids
             _, utils, _, info = env.vector_step(all_bids, debug = debug) # takes ~0.015s
             total = tf.reduce_sum(utils[:, player_idx])
+            # loss is the negative of the average utility of the player
             loss = -total / tf.cast(opponent_samples.shape[0], tf.float32) # Cast divisor just in case
             if debug:
                 loss = tf.debugging.check_numerics(loss, "NaN/Inf in loss calculation") # Add check
@@ -202,7 +233,10 @@ def train_best_response(env: BidTradingEnv, joint_distribution, player_idx, endo
     
     return agent_bid
 
-# === Meta-Game Construction ===
+'''
+    Build the meta-game for a given sets of policies. This is done by taking the Cartesian product of the policies,
+    and then evaluating the utilities of each joint policy.
+'''
 def build_meta_game(env: BidTradingEnv, policy_sets):
     joint_policies = list(itertools.product(*policy_sets))
     meta_game = []
@@ -211,7 +245,13 @@ def build_meta_game(env: BidTradingEnv, policy_sets):
         meta_game.append([joint, payoff])
     return meta_game
 
-# === CCE Solver ===
+'''
+    Solve the CCE for a given meta-game. This is done using linear programming. To build the constraints, add one 
+    constraint for each player for each fixed deviation. The values of each constraint correspond to the utility of the 
+    deviation. This deviation utility times the probabilities should be less than 0.
+
+    The resulting probability distribution can be maximized for welfare or gini. 
+'''
 def solve_cce(meta_game, num_players, policy_sets):
     joint_strats = [meta_game[i][0] for i in range(len(meta_game))] # List of tuples of Tensors
     # Ensure payoffs are numpy for indexing and calculations within the solver
@@ -304,8 +344,12 @@ def solve_cce(meta_game, num_players, policy_sets):
 
     return [(joint_strats[i], sigma_value[i]) for i in range(len(joint_strats))]
 
+'''
+    Prune the strategies that are not played with positive probability. This is done by counting the probability of each strategy
+    in the joint distribution. If a strategy is played with zero probability, it is removed from the policy set.
+'''
 def prune_strategies(policy_sets, sigma):
-    # Remove strategies that are not played with positive probability
+    # Count the probability of each strategy in the joint distribution, shape (num_players, num_strategies)
     policy_counts = [[0 for _ in range(len(policy_sets[p]))] for p in range(len(policy_sets))]
     for joint_strat, prob in sigma:
         for i, pi in enumerate(joint_strat):
@@ -313,6 +357,7 @@ def prune_strategies(policy_sets, sigma):
                 if np.all(pi == strat):
                     policy_counts[i][j] += prob
     new_policy_sets = []
+    # Now for each player recreate the policy set with only the strategies that are played with positive probability
     for p in range(len(policy_sets)):
         new_player_policies = []
         for i, pi in enumerate(policy_sets[p]):
@@ -323,7 +368,14 @@ def prune_strategies(policy_sets, sigma):
         new_policy_sets.append(new_player_policies)
     return new_policy_sets
 
+'''
+    Run the JPSRO algorithm. This is done by building the meta-game, solving the CCE, and then using the best response to add a new policy
+    to the policy set. This is done iteratively until the policy sets converge.
+
+    Every pruning_parameter steps, the policy sets are pruned to remove strategies that are not played.
+'''
 def jprso(env: BidTradingEnv, debug = False, log_file = None):
+    # Initialize the algorithm and create step 0 meta-game and CCE
     num_players = env.num_players
     policy_sets = [[env.create_basic_policy(p)] for p in range(num_players)]
     meta_game = build_meta_game(env, policy_sets)
@@ -345,8 +397,10 @@ def jprso(env: BidTradingEnv, debug = False, log_file = None):
             f.write(f"sigma: {sigma_str}\n")
             f.write("--------------------------------\n")
 
+    # iterate and find new best response for each player, then solve the new CCE, then prune the strategies if necessary
     for epoch in range(PARAM_DICT["max_epochs"]):
         t = time.time()
+        # for each player, find a new best response policy to the previous joint distribution
         for p in range(num_players):
             # train_best_response returns a tf.Variable, convert to numpy for logging
             new_pi_var = train_best_response(env, sigma, p, env.endowments[p], debug=debug)
@@ -360,9 +414,12 @@ def jprso(env: BidTradingEnv, debug = False, log_file = None):
             # Append the original tf.Variable/Tensor to policy_sets
             policy_sets[p].append(new_pi_var)
 
+        # build the new meta-game and solve the new CCE
         meta_game = build_meta_game(env, policy_sets)
         sigma = solve_cce(meta_game, num_players, policy_sets)
-        if epoch % 5 == 0:
+
+        # prune the strategies if necessary
+        if epoch % PARAM_DICT["pruning_parameter"] == 0:
             policy_sets = prune_strategies(policy_sets, sigma)
 
         if not debug and log_file:
@@ -379,11 +436,15 @@ def jprso(env: BidTradingEnv, debug = False, log_file = None):
         print(f"Epoch {epoch} took {round(time.time() - t, 2)} seconds")
     return sigma
 
+'''
+    Testing function to run the JPSRO algorithm. Runs a single training run with the defined parameters.
+    Returns the final joint distribution.
+'''
 def run_training(debug = False, log_file = None):
     # === Main Loop ===
-    endowments = np.array([[4, 4], [4, 4]])
-    alphas = np.array([[0.75, 0.25], [0.25, 0.75]])
-    # optimal outcome is p=[1,1], x=[[6,2],[2,6]]
+    endowments = np.array([[4, 4], [4, 4], [4, 4], [4, 4]])
+    alphas = np.array([[0.75, 0.25], [0.25, 0.75], [0.66, 0.33], [0.33, 0.66]])
+    # optimal outcome is p=[1,1], x=[[6,2],[2,6],[5.33,2.67],[2.67,5.33]]
     env = BidTradingEnv(endowments, alphas)
 
     if log_file:
@@ -399,10 +460,12 @@ def run_training(debug = False, log_file = None):
         with open(log_file, "a") as f:
             f.write(f"End of training at time: {datetime.now().strftime('%Y%m%d_%H%M%S')}\n")
     return ret
-    
 
-if __name__ == "__main__":
-    #run_training(debug = False, log_file = None)
+'''
+    Run a parameter sweep over the hyperparameters. This is the sweep done in the thesis paper,
+    results can be found there. 
+'''
+def run_parameter_sweep(debug = False, log_file = None):
     optimizers = [[tf.keras.optimizers.RMSprop, "RMSprop"]]#, [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.Adam, "Adam"], [tf.keras.optimizers.SGD, "SGD"]]
     learning_rates = [0.005]#[0.001, 0.005]
 
@@ -443,119 +506,15 @@ if __name__ == "__main__":
                         sigma_processed = [[[strat.numpy().tolist() for strat in joint], prob] for joint, prob in sigma]
                         with open(f"results/{log_prefix}{log_filename}.json", "a") as f:
                             f.write(f"{json.dumps(sigma_processed)}\n")
+    
 
-                    
-
-
-
-
-
-'''
-@tf.function
-    def match_trades(self, bids):
-        """
-        Computes the net buy/sell quantities and average prices for each player and good.
-
-        Args:
-            bids: A tensor of shape (num_players, 4, num_goods), where:
-                - bids[:, 0, g] = buy price for good g
-                - bids[:, 1, g] = buy quantity for good g
-                - bids[:, 2, g] = sell price for good g
-                - bids[:, 3, g] = sell quantity for good g
-
-        Returns:
-            output_bids: A tensor of shape (num_players, 4, num_goods) with:
-                - output[:, 0, g] = average buy price for good g
-                - output[:, 1, g] = total bought quantity
-                - output[:, 2, g] = average sell price
-                - output[:, 3, g] = total sold quantity
-        """
-        num_players = tf.shape(bids)[0]
-        num_goods = tf.shape(bids)[2]
-        output_bids = tf.zeros((num_players, 4, num_goods), dtype=tf.float32)
-        eps = tf.constant(1e-8, dtype=tf.float32)
-
-        def weighted_avg_price(old_price, old_qty, new_price, new_qty):
-            total_qty = old_qty + new_qty
-            safe_qty = tf.maximum(total_qty, eps)
-            return (old_price * old_qty + new_price * new_qty) / safe_qty
-
-        def execute_trade(output, index, good, qty, price, is_buy):
-            price_idx = 0 if is_buy else 2
-            qty_idx = 1 if is_buy else 3
-
-            old_qty = output[index, qty_idx, good]
-            old_price = output[index, price_idx, good]
-
-            new_qty = old_qty + qty
-            avg_price = weighted_avg_price(old_price, old_qty, price, qty)
-
-            output = tf.tensor_scatter_nd_update(output, [[index, qty_idx, good]], [new_qty])
-            output = tf.tensor_scatter_nd_update(output, [[index, price_idx, good]], [avg_price])
-            return output
-
-        for good in tf.range(num_goods):
-            buy_prices = bids[:, 0, good]
-            sell_prices = bids[:, 2, good]
-
-            buy_order = tf.argsort(buy_prices, direction="DESCENDING")
-            sell_order = tf.argsort(sell_prices)
-
-            buy_index = tf.constant(0)
-            sell_index = tf.constant(0)
-
-            buyer_idx = buy_order[buy_index]
-            seller_idx = sell_order[sell_index]
-
-            buy_price = tf.gather(bids[:, 0, good], buyer_idx)
-            buy_qty = tf.gather(bids[:, 1, good], buyer_idx)
-            sell_price = tf.gather(bids[:, 2, good], seller_idx)
-            sell_qty = tf.gather(bids[:, 3, good], seller_idx)
-
-            def loop_cond(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
-                return tf.logical_and(
-                    tf.logical_and(bi < num_players, si < num_players),
-                    bp >= sp
-                )
-
-            def loop_body(output, bi, si, b_idx, s_idx, bp, bq, sp, sq):
-                trade_qty = tf.minimum(bq, sq)
-                should_trade = trade_qty > 0
-
-                def trade():
-                    out = execute_trade(output, b_idx, good, trade_qty, bp, True)
-                    out = execute_trade(out, s_idx, good, trade_qty, bp, False)
-                    return out
-
-                output = tf.cond(should_trade, trade, lambda: output)
-
-                bq = tf.cond(should_trade, lambda: bq - trade_qty, lambda: bq)
-                sq = tf.cond(should_trade, lambda: sq - trade_qty, lambda: sq)
-
-                next_bi = bi + 1
-                has_next_buyer = next_bi < num_players
-                next_buyer_idx = tf.cond(has_next_buyer, lambda: buy_order[next_bi], lambda: b_idx)
-                advance_buyer = tf.logical_and(tf.equal(bq, 0), has_next_buyer)
-
-                bi = tf.cond(tf.equal(bq, 0), lambda: next_bi, lambda: bi)
-                b_idx = tf.cond(advance_buyer, lambda: next_buyer_idx, lambda: b_idx)
-                bp = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 0, good], next_buyer_idx), lambda: bp)
-                bq = tf.cond(advance_buyer, lambda: tf.gather(bids[:, 1, good], next_buyer_idx), lambda: bq)
-
-                next_si = si + 1
-                has_next_seller = next_si < num_players
-                next_seller_idx = tf.cond(has_next_seller, lambda: sell_order[next_si], lambda: s_idx)
-                advance_seller = tf.logical_and(tf.equal(sq, 0), has_next_seller)
-
-                si = tf.cond(tf.equal(sq, 0), lambda: next_si, lambda: si)
-                s_idx = tf.cond(advance_seller, lambda: next_seller_idx, lambda: s_idx)
-                sp = tf.cond(advance_seller, lambda: tf.gather(bids[:, 2, good], next_seller_idx), lambda: sp)
-                sq = tf.cond(advance_seller, lambda: tf.gather(bids[:, 3, good], next_seller_idx), lambda: sq)
-
-                return output, bi, si, b_idx, s_idx, bp, bq, sp, sq
-
-            loop_vars = [output_bids, buy_index, sell_index, buyer_idx, seller_idx, buy_price, buy_qty, sell_price, sell_qty]
-            output_bids, *_ = tf.while_loop(loop_cond, loop_body, loop_vars, maximum_iterations=num_players * 2 + 1)
-
-        return output_bids
-'''
+if __name__ == "__main__":
+    #run_training(debug = False, log_file = None)
+    log_prefix = f"jpsro_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
+    os.makedirs(f"logs/{log_prefix}", exist_ok=True)
+    os.makedirs(f"results/{log_prefix}", exist_ok=True)
+    log_filename = "jprso_many_player"
+    sigma = run_training(debug = False, log_file = f"logs/{log_prefix}{log_filename}.txt")
+    sigma_processed = [[[strat.numpy().tolist() for strat in joint], prob] for joint, prob in sigma]
+    with open(f"results/{log_prefix}{log_filename}.json", "a") as f:
+        f.write(f"{json.dumps(sigma_processed)}\n")
