@@ -1,6 +1,3 @@
 # Competitive Market Directory
 
-This directory is mostly an artifact of the work towards a correlated equlkibrium of the market game. Computing the compeittive equilibrium directly is proven to 
-be PPAD-complete, so the efforts in this directory are either infeasible or have large assumptions. There are some basic components of market representation that 
-are reused in other directories, however the contents here are largeley unfinished. the `pareto_planner.py` file is an attempt to find the pareto weights that 
-correspond to the competitive equilibrium, but it is not working. 
+This directory is mostly an artifact of the work towards a correlated equlkibrium of the market game. Computing the compeittive equilibrium directly is proven to be PPAD-complete, so the efforts in this directory are either infeasible or have large assumptions. There are some basic components of market representation that are reused in other directories, however the contents here are largeley unfinished. the `pareto_planner.py` file is an attempt to find the pareto weights that correspond to the competitive equilibrium, but it is not working. 

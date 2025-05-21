@@ -5,6 +5,11 @@ import { importContracts } from '../data/contractData'
 
 const web3 = new Web3(web3Provider);
 
+/*
+ * This code tests the explicit contract implementations. It creates a manager contract for the contracts
+ * then instatiate user's contracts and runs tests on them.
+*/
+
 const runExample = async () => {
   try {
     const accounts = await web3.eth.getAccounts();

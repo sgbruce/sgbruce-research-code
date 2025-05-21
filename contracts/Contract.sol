@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.6.12 <0.9.0;
 
+// This is a model of the multi-principal agent setting
+// It keeps explicit track of all offered contracts, and uses the 
+// "principal's principal" defined by Bernheim and Winston's 
+// "Common Agency" to attemt to fix innefficiencies 
+
 /***
 * This contract represents a contract offered by a principal to an agent.
 * The contract stipulates payouts to an agent "agent" from a principal "principal" 

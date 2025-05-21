@@ -419,7 +419,8 @@ def reward_to_csv(directory: str):
 
 
 if __name__ == "__main__":
-    test_env()
+    analyze_results("results/jpsro_untruthful_50/jprso_untruthful.json")
+    # test_env()
     # test_solver()
     # directory = "results/jpsro_param"
     # files_in_directory = ["jprso_RMSprop_0.001_30_200_100.json","jprso_RMSprop_0.001_50_50_500.json","jprso_RMSprop_0.001_50_200_200.json","jprso_RMSprop_0.001_30_500_200.json","jprso_RMSprop_0.001_30_100_200.json"] # os.listdir(directory)

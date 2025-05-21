@@ -5,6 +5,11 @@ import * as data from '../data/JPEex';
 
 const web3 = new Web3(web3Provider);
 
+/*
+ * This code tests the colored coin contract implementations. It creates a manager contract for the coins
+ * then instatiate user's colored coins and runs tests on them.
+*/
+
 type PlatformRight = {
   platformId: string;
   tradePrice: number;

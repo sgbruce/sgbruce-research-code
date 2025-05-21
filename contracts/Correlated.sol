@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.6.12 <0.9.0;
 
-// INITIAL PASS - 2 PLAYERS
+// This contract attemts to explicitly compute correlated equilibria using the same linear programming methods as the 
+// correlated directory. It is a good blueprint for implementing a CE solver in solidity in the future, but is not fully 
+// functional. It is currently only designed for 2 players, and is missing the actual linear programming solver.
 
 uint constant PROB_MAX_INT = 10000;
 

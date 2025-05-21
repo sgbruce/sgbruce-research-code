@@ -20,15 +20,15 @@ This script contains tests for the no-regret learners, including examples of dom
 This file is responsible for generating labeled data for supervised learning approaches. It computes optimal trading strategies for given endowments and preferences using nonlinear optimization techniques. The data generated is used to train models to predict optimal strategies.
 
 ### `jpsro.py`
-This file contains the implementation of the Joint Policy Space Response Orcale (JPSRO). It uses the 
-`DubeyGame` class create a market environment, and then implements the best response etimator, 
-meta-solver, and meta-game used in the JPSRO algorithm.
+This file contains the implementation of the Joint Policy Space Response Orcale (JPSRO). It uses the `DubeyGame` class create a market environment, and then implements the best response etimator, meta-solver, and meta-game used in the JPSRO algorithm.
 
 ### `jpsro_tests.py`
 This script tests the environment for the Joint Policy Space Response Orcale (JPSRO). It includes tests for the trading environment with set bids and checks the correctness of trading operations. It also tests the CCE meta-solver with specific strategy examples.
+
+### `jpsro_untruthful.py`
+This is a slight variation on the JPRSO algorithm that allows for testing the JPSRO algorithm with untruthful best responses. It is a wrapper on the `jpsro.py` file that allows for switching between truthful and untruthful best responses cobb douglass exponents. 
 
 ## Additional Information
 
 - The directory leverages TensorFlow and NumPy for numerical computations and machine learning tasks.
 - The `GEKKO` optimization suite is used in `datagen.py` for solving nonlinear optimization problems.
-- The tests are designed to ensure the robustness and correctness of the implemented algorithms and models.

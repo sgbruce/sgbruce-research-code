@@ -26,10 +26,10 @@ PARAM_DICT = {
     "solver": tf.keras.optimizers.RMSprop,
     "amsgrad": True,
     "learning_rate": 0.001,
-    "max_epochs": 25,
+    "max_epochs": 50,
     "best_response_epochs": 200,
     "best_response_samples": 500,
-    "pruning_parameter": 4
+    "pruning_parameter": 5
 }
 
 '''
